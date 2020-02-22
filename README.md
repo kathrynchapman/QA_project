@@ -5,7 +5,6 @@ Rewritten scripts:
       python pt_cqa_supports.py
   2. pt_cqa_gen_batches.py
   
-<<<<<<< HEAD
 To-do:
 - cqa_model.py
 	- bert_rep 					(1) READY
@@ -17,6 +16,3 @@ To-do:
 	- history_attention_net 			(1)
 	- disable_history_attention_net 		(0)
 	- fine_grained_history_attention_net 		(1)
-=======
-Next
->>>>>>> 8ac31b7c11e1adec445167762d8f3bb0ae5d4fdc
