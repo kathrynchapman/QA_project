@@ -1,3 +1,8 @@
+<<<<<<< HEAD
+=======
+#trial to commit some changes
+
+>>>>>>> 8ac31b7c11e1adec445167762d8f3bb0ae5d4fdc
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -6,6 +11,7 @@ import collections
 import json
 import math
 import os
+<<<<<<< HEAD
 from bert import modeling
 #import optimization
 #import six
@@ -32,14 +38,41 @@ def bert_rep(bert_config, input_ids):
     final_hidden = model(input_ids)[0]
     sent_rep = model(input_ids)[1]
 
+=======
+import modeling
+import optimization
+import tokenization
+import six
+import tensorflow as tf
+from cqa_flags import FLAGS
+
+def bert_rep(bert_config, is_training, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings):
+    model = modeling.BertModel(
+        config=bert_config,
+        is_training=is_training,
+        input_ids=input_ids,
+        input_mask=input_mask,
+        token_type_ids=segment_ids,
+        history_answer_marker=history_answer_marker,
+        use_one_hot_embeddings=use_one_hot_embeddings)
+
+    final_hidden = model.get_sequence_output()
+    sent_rep = model.get_pooled_output()
+>>>>>>> 8ac31b7c11e1adec445167762d8f3bb0ae5d4fdc
     return final_hidden, sent_rep
 
 
 def bert_segment_rep(final_hidden):
+<<<<<<< HEAD
     first_token_tensor = tf.squeeze(final_hidden[:, 0:1, :], axis=1) 
     return first_token_tensor
 
 
+=======
+    first_token_tensor = tf.squeeze(final_hidden[:, 0:1, :], axis=1)    
+    return first_token_tensor
+
+>>>>>>> 8ac31b7c11e1adec445167762d8f3bb0ae5d4fdc
 def cqa_model(final_hidden):
 #     final_hidden_shape = modeling.get_shape_list(final_hidden, expected_rank=3)
 #     batch_size = final_hidden_shape[0]
@@ -377,6 +410,7 @@ def fine_grained_history_attention_net(bert_representation, mtl_input, slice_mas
 #     (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
 
 #     return (start_logits, end_logits)
+<<<<<<< HEAD
 
 
 
@@ -401,3 +435,5 @@ if __name__ == '__main__':
             history_answer_marker=history_answer_marker,
             use_one_hot_embeddings=False
             )
+=======
+>>>>>>> 8ac31b7c11e1adec445167762d8f3bb0ae5d4fdc
