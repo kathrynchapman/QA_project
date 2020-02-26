@@ -209,9 +209,7 @@ if __name__ == '__main__':
 
     input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0) #THIS LINE OF CODE IS JUST TO TEST
     bert_representation, cls_representation = bert_rep(bert_config, input_ids)
-#    print(bert_representation) #TEST
-#    print(cls_representation) #TEST
-    cqa_model(bert_representation)
+    
 
 #    reduce_mean_representation = tf.reduce_mean(bert_representation, axis=1)
 #    reduce_max_representation = tf.reduce_max(bert_representation, axis=1) 

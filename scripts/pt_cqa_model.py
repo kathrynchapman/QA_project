@@ -34,17 +34,12 @@ def bert_rep(bert_config, input_ids):
     return final_hidden, sent_rep
 
 
-def bert_segment_rep(final_hidden): #THIS FUNCTION IS NOT USED AT ALL, I THINK
-    first_token_tensor = tf.squeeze(final_hidden[:, 0:1, :], axis=1) 
-    return first_token_tensor
-
-
 def cqa_model(final_hidden):
     """
     :param final_hidden: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size), 
         sequence of hidden-states at the output of the last layer of the model
-    :return start_logits: torch.tensor
-    :return end_logits: torch.tensor
+    :return start_logits: torch.Tensor object
+    :return end_logits: torch.Tensor object
     """
 
     final_hidden_shape = final_hidden.shape
@@ -75,42 +70,41 @@ def cqa_model(final_hidden):
     return start_logits, end_logits
 
 
-def aux_cqa_model(final_hidden):
-
-    final_hidden_shape = tf.shape(final_hidden)
-    batch_size = final_hidden_shape[0]
-    seq_length = final_hidden_shape[1]
-    hidden_size = final_hidden_shape[2]
-
-    output_weights = tf.get_variable(
-        "cls/cqa/aux_output_weights", [2, FLAGS.bert_hidden],
-        initializer=tf.truncated_normal_initializer(stddev=0.02))
-
-    output_bias = tf.get_variable(
-        "cls/cqa/aux_output_bias", [2], initializer=tf.zeros_initializer())
-
-    final_hidden_matrix = tf.reshape(final_hidden, [batch_size * seq_length, hidden_size])
-    logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
-    logits = tf.nn.bias_add(logits, output_bias)
-
-    logits = tf.reshape(logits, [batch_size, seq_length, 2])
-    logits = tf.transpose(logits, [2, 0, 1])
-
-    unstacked_logits = tf.unstack(logits, axis=0)
-
-    (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
-
-    return (start_logits, end_logits)
-
 def yesno_model(sent_rep):
-    logits = tf.layers.dense(sent_rep, 3, activation=None,
-                kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='yesno_model')
+    """
+    :param sent_rep: torch.FloatTensor of shape (batch_size, hidden_size), 
+        last layer hidden-state of the first token of the sequence (classification token) further processed by 
+        a Linear layer and a Tanh activation function
+    :return logits: torch.Tensor object
+    """
+
+    linear_layer = torch.nn.Linear(sent_rep.shape[1], 3)
+
+    #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
+    torch.nn.init.normal_(linear_layer.weight, std=0.02)
+
+    logits = linear_layer(sent_rep)
+
     return logits
+
 
 def followup_model(sent_rep):
-    logits = tf.layers.dense(sent_rep, 3, activation=None,
-                kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='followup_model')
+    """
+    :param sent_rep: torch.FloatTensor of shape (batch_size, hidden_size), 
+        last layer hidden-state of the first token of the sequence (classification token) further processed by 
+        a Linear layer and a Tanh activation function
+    :return logits: torch.Tensor object
+    """
+
+    linear_layer = torch.nn.Linear(sent_rep.shape[1], 3)
+
+    #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
+    torch.nn.init.normal_(linear_layer.weight, std=0.02)
+
+    logits = linear_layer(sent_rep)
+
     return logits
+
 
 def history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
     
@@ -198,6 +192,7 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     new_bert_representation.set_shape([None, FLAGS.max_seq_length, FLAGS.bert_hidden])
     
     return new_bert_representation, new_mtl_input, tf.squeeze(probs)
+    
 
 def disable_history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
     
@@ -290,6 +285,7 @@ def disable_history_attention_net(bert_representation, history_attention_input, 
     
     return new_bert_representation, new_mtl_input, tf.squeeze(probs)
 
+
 def fine_grained_history_attention_net(bert_representation, mtl_input, slice_mask, slice_num):
     
     # first concat the bert_representation and mtl_input togenther
@@ -353,55 +349,3 @@ def fine_grained_history_attention_net(bert_representation, mtl_input, slice_mas
     new_mtl_input = tf.squeeze(new_mtl_input, axis=1)
     
     return new_bert_representation, new_mtl_input, tf.squeeze(probs)
-
-# def cqa_model(bert_config, is_training, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings):
-#     final_hidden = bert_rep(bert_config, is_training, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings)
-
-#     final_hidden_shape = modeling.get_shape_list(final_hidden, expected_rank=3)
-#     batch_size = final_hidden_shape[0]
-#     seq_length = final_hidden_shape[1]
-#     hidden_size = final_hidden_shape[2]
-
-#     output_weights = tf.get_variable(
-#         "cls/cqa/output_weights", [2, hidden_size],
-#         initializer=tf.truncated_normal_initializer(stddev=0.02))
-
-#     output_bias = tf.get_variable(
-#         "cls/cqa/output_bias", [2], initializer=tf.zeros_initializer())
-
-#     final_hidden_matrix = tf.reshape(final_hidden, [batch_size * seq_length, hidden_size])
-#     logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
-#     logits = tf.nn.bias_add(logits, output_bias)
-
-#     logits = tf.reshape(logits, [batch_size, seq_length, 2])
-#     logits = tf.transpose(logits, [2, 0, 1])
-
-#     unstacked_logits = tf.unstack(logits, axis=0)
-
-#     (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
-
-#     return (start_logits, end_logits)
-
-
-
-if __name__ == '__main__':
-
-    parser = ArgumentParser(
-        description='QA model')
-    parser.add_argument(
-        '--bert_config_json', '-bert_config_json', help='path to the json file containing the parameters of the BERT model')  
-    args = parser.parse_args()
-
-    #bert_config = transformers.BertConfig.from_json_file(args.bert_config_json)
-    #bert_representation, cls_representation = bert_rep(bert_config=bert_config)
-
-    bert_config = modeling.BertConfig.from_json_file(args.bert_config_json)
-    bert_representation, cls_representation = bert_rep(
-            bert_config=bert_config,
-            is_training=training,
-            input_ids=input_ids,
-            input_mask=input_mask,
-            segment_ids=segment_ids,
-            history_answer_marker=history_answer_marker,
-            use_one_hot_embeddings=False
-            )
