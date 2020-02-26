@@ -9,7 +9,7 @@ To-do:
 - cqa_model.py
 	- bert_rep 					(1) READY
 	- bert_segment_rep 				(1) Do we need to re-implement this function? They don't use it anywhere, I think
-	- cqa_model 					(0)
+	- cqa_model 					(0) READY
 	- aux_cqa_model 				(0)
 	- yesno_model 					(0)
 	- followup_model 				(0)
