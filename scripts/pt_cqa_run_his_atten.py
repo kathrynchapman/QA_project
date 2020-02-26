@@ -208,11 +208,10 @@ if __name__ == '__main__':
 #    aux_end_positions = tf.placeholder(tf.int32, shape=[None], name='aux_end_positions')
 
     input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0) #THIS LINE OF CODE IS JUST TO TEST
-    #I THINK WE SHOULD PREPARE THE INPUT_IDS BEFORE THIS PART. AS I UNDERSTAND, IN THE ORIGINAL CODE THEY DO IT LATER BECAUSE OF THIS PLACEHOLDERS
-    #WAY IN WHICH THE OLD TENSORFLOW WORKS. THEY MAKE THE GRAPH FIRST AND LATER "FILL" IT WITH THE ACTUAL VALUES. YOU CANNOT DO THIS WITH PYTORCH.
     bert_representation, cls_representation = bert_rep(bert_config, input_ids)
-    print(bert_representation)
-    print(cls_representation)
+#    print(bert_representation) #TEST
+#    print(cls_representation) #TEST
+    cqa_model(bert_representation)
 
 #    reduce_mean_representation = tf.reduce_mean(bert_representation, axis=1)
 #    reduce_max_representation = tf.reduce_max(bert_representation, axis=1) 

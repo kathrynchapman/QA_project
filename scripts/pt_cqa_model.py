@@ -12,12 +12,11 @@ from bert import modeling
 import tensorflow as tf
 from argparse import ArgumentParser
 import transformers
+import torch
 
 
 def bert_rep(bert_config, input_ids):
     """
-    BERT model.
-
     :param bert_config: 'BertConfig' instance
     :param input_ids: torch.LongTensor of shape (batch_size, sequence_length), 
         indices of input sequence tokens in the vocabulary, which can be obtained using transformers.BertTokenizer
@@ -35,41 +34,46 @@ def bert_rep(bert_config, input_ids):
     return final_hidden, sent_rep
 
 
-def bert_segment_rep(final_hidden):
+def bert_segment_rep(final_hidden): #THIS FUNCTION IS NOT USED AT ALL, I THINK
     first_token_tensor = tf.squeeze(final_hidden[:, 0:1, :], axis=1) 
     return first_token_tensor
 
 
 def cqa_model(final_hidden):
-#     final_hidden_shape = modeling.get_shape_list(final_hidden, expected_rank=3)
-#     batch_size = final_hidden_shape[0]
-#     seq_length = final_hidden_shape[1]
-#     hidden_size = final_hidden_shape[2]
+    """
+    :param final_hidden: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size), 
+        sequence of hidden-states at the output of the last layer of the model
+    :return start_logits: torch.tensor
+    :return end_logits: torch.tensor
+    """
 
-    final_hidden_shape = tf.shape(final_hidden)
+    final_hidden_shape = final_hidden.shape
     batch_size = final_hidden_shape[0]
     seq_length = final_hidden_shape[1]
     hidden_size = final_hidden_shape[2]
 
-    output_weights = tf.get_variable(
-        "cls/cqa/output_weights", [2, FLAGS.bert_hidden],
-        initializer=tf.truncated_normal_initializer(stddev=0.02))
+    #In the original code, they use truncated normal distribution, but there's no function for this in pytorch
+    #I found this workaround https://discuss.pytorch.org/t/implementing-truncated-normal-initializer/4778/16
+    #But maybe it's not worth it to go through all that trouble, so I just used normal distribution for now
+    #In the cqa_flags.py file, they specify that the value for bert hidden units can be 768 or 1024 and set it to 768
+    #I had to set it to 1024 though, otherwise I was getting size mismatch when I tried to do matrix multiplication later
+    output_weights = torch.empty(2, 1024).normal_(std=0.02)
 
-    output_bias = tf.get_variable(
-        "cls/cqa/output_bias", [2], initializer=tf.zeros_initializer())
+    output_bias = torch.zeros(2)
 
-    final_hidden_matrix = tf.reshape(final_hidden, [batch_size * seq_length, hidden_size])
-    logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
-    logits = tf.nn.bias_add(logits, output_bias)
+    final_hidden_matrix = final_hidden.view(batch_size * seq_length, hidden_size)
+    logits = torch.matmul(final_hidden_matrix, torch.transpose(output_weights, 0, 1))
+    logits = torch.add(logits, output_bias)
 
-    logits = tf.reshape(logits, [batch_size, seq_length, 2])
-    logits = tf.transpose(logits, [2, 0, 1])
+    logits = logits.view(batch_size, seq_length, 2)
+    logits = logits.permute(2, 0, 1)
 
-    unstacked_logits = tf.unstack(logits, axis=0)
+    unstacked_logits = torch.unbind(logits, dim=0)
 
     (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
 
-    return (start_logits, end_logits)
+    return start_logits, end_logits
+
 
 def aux_cqa_model(final_hidden):
 
