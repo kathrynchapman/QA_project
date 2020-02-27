@@ -6,13 +6,20 @@ import collections
 import json
 import math
 import os
-from bert import modeling
+# from bert import modeling
+
 #import optimization
 #import six
 import tensorflow as tf
 from argparse import ArgumentParser
 import transformers
 import torch
+
+
+from transformers import BertPreTrainedModel
+from transformers.modeling_bert import BERT_PRETRAINED_MODEL_ARCHIVE_MAP, BertModel, \
+    BERT_INPUTS_DOCSTRING, BERT_START_DOCSTRING
+from transformers import BertConfig, BertTokenizer
 
 
 def bert_rep(bert_config, input_ids):
@@ -27,7 +34,8 @@ def bert_rep(bert_config, input_ids):
         a Linear layer and a Tanh activation function
     """
 
-    model = transformers.BertModel(config=bert_config,)
+    # model = transformers.BertModel(config=bert_config,)
+    model = BertModel.from_pretrained('bert-base-cased')
     final_hidden = model(input_ids)[0]
     sent_rep = model(input_ids)[1]
 

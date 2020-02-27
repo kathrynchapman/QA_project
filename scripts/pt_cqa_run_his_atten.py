@@ -8,7 +8,7 @@ import collections
 import json
 import math
 import os
-from bert import modeling
+# from bert import modeling
 #import optimization
 import six
 import tensorflow as tf
@@ -20,7 +20,7 @@ from time import time
 import traceback
 
 import torch
-import transformers
+from transformers import modeling_bert, BertConfig, BertTokenizer
 from pt_cqa_supports import *
 #from cqa_flags import FLAGS
 from pt_cqa_model import *
@@ -45,7 +45,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     tf.compat.v1.set_random_seed(0) #change to torch.manual_seed(seed)
-    bert_config = transformers.BertConfig.from_json_file(args.bert_config_json)
+    bert_config = BertConfig
+    # bert_config = transformers.BertConfig.from_json_file(args.bert_config_json)
 
 #    if FLAGS.max_seq_length > bert_config.max_position_embeddings:
 #        raise ValueError(
