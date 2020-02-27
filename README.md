@@ -12,11 +12,14 @@ To-do:
 	- cqa_model 					(0) READY
 	- aux_cqa_model 				(0) No need to re-implement, this function is exactly the same as cqa_model
 	- yesno_model 					(0) READY
-	- followup_model 				(0) READY, same as yesno_model with another name
-	- history_attention_net 			(1)
-	- disable_history_attention_net 		(0)
+	- followup_model 				(0) No need to re-implement, this function is exactly the same as yesno_model
+	- history_attention_net 			(1) IN PROGRESS
+	- disable_history_attention_net 		(0) NEXT, almost the same as history_attention_net
 	- fine_grained_history_attention_net 		(1)
 
 
 Note for Kathryn: Did you run the original code? It looks a bit messy in some parts, as if they tried different functions and versions and forgot
 to clean it up before setting the definite github repository. I started to wonder if it works at all...
+
+We could define the flags that we want to be flexible as parameters in the command line (with args parse) and the ones that we want to be fixed
+at the beginning of the main script

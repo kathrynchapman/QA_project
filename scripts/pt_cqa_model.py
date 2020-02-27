@@ -88,111 +88,110 @@ def yesno_model(sent_rep):
     return logits
 
 
-def followup_model(sent_rep):
-    """
-    :param sent_rep: torch.FloatTensor of shape (batch_size, hidden_size), 
-        last layer hidden-state of the first token of the sequence (classification token) further processed by 
-        a Linear layer and a Tanh activation function
-    :return logits: torch.Tensor object
-    """
-
-    linear_layer = torch.nn.Linear(sent_rep.shape[1], 3)
-
-    #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
-    torch.nn.init.normal_(linear_layer.weight, std=0.02)
-
-    logits = linear_layer(sent_rep)
-
-    return logits
-
-
 def history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
+    """
+    :param bert_representation: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size), 
+        sequence of hidden-states at the output of the last layer of the model
+    :param history_attention_input: torch.Tensor
+    :param mtl_input:
+    :param slice_mask: list of size=train_batch_size, containing integers corresponding to the size
+        of each subtensor we will get after splitting the history_attention_input tensor
+    :param slice_num: int
+    :return new_bert_representation: 
+    :return new_mtl_input: 
+    :return squeezed probs:
+    """
     
     # 12 * 768 --> e.g. 20 * 768
-    history_attention_input = tf.pad(history_attention_input, [[0, FLAGS.train_batch_size - slice_num], [0, 0]])  
+    padding = torch.nn.ZeroPad2d((0, 0, 0, 1024-slice_num)) #bert_hidden_units=1024, padding at the bottom
+    history_attention_input = padding(history_attention_input)
     
-    # the splits contains 12 feature groups. e.g. the first might be 4 * 768 (the number 4 is is just an example)
-    splits = tf.split(history_attention_input, slice_mask, 0)
+    # the splits contains 12 feature groups. e.g. the first might be 4 * 768 (the number 4 is just an example)
+    splits = torch.split(history_attention_input, slice_mask, 0)
     
     # --> 11 * 768
-    pad_fn = lambda x, num: tf.pad(x, [[FLAGS.max_history_turns - num, 0], [0, 0]])   
-    # padded = tf.map_fn(lambda x: pad_fn(x[0], x[1]), (list(splits), slice_mask), dtype=tf.float32) 
+    def pad_fn(x, num):
+        padding = torch.nn.ZeroPad2d((0, 0, 11-num, 0)) #max_history_turns=11, padding at the top
+        return padding(x) 
+        
     padded = []
-    for i in range(FLAGS.train_batch_size):
+    for i in range(3): #train_batch_size=12, but ie used 3 for my mini-example
         padded.append(pad_fn(splits[i], slice_mask[i]))
     
     # --> 12 * 11 * 768
-    input_tensor = tf.stack(padded, axis=0)
-    input_tensor.set_shape([FLAGS.train_batch_size, FLAGS.max_history_turns, FLAGS.bert_hidden])
+#    input_tensor = tf.stack(padded, axis=0)
+#    input_tensor.set_shape([FLAGS.train_batch_size, FLAGS.max_history_turns, FLAGS.bert_hidden])
     
-    if FLAGS.history_attention_hidden:
-        hidden = tf.layers.dense(input_tensor, 100, activation=tf.nn.relu,
-                kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_hidden')
-        logits = tf.layers.dense(hidden, 1, activation=None,
-                kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_model')
-    else:
+#    if FLAGS.history_attention_hidden:
+#        hidden = tf.layers.dense(input_tensor, 100, activation=tf.nn.relu,
+#                kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_hidden')
+#        logits = tf.layers.dense(hidden, 1, activation=None,
+#                kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_model')
+#    else:
         # --> 12 * 11 * 1
-        logits = tf.layers.dense(input_tensor, 1, activation=None,
-                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_model')
+#        logits = tf.layers.dense(input_tensor, 1, activation=None,
+#                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_model')
     # --> 12 * 11
-    logits = tf.squeeze(logits, axis=2)
+#    logits = tf.squeeze(logits, axis=2)
     
     # mask: 12 * 11
-    logits_mask = tf.sequence_mask(slice_mask, FLAGS.max_history_turns, dtype=tf.float32)
-    logits_mask = tf.reverse(logits_mask, axis=[1])
-    exp_logits_masked = tf.exp(logits) * logits_mask 
+#    logits_mask = tf.sequence_mask(slice_mask, FLAGS.max_history_turns, dtype=tf.float32)
+#    logits_mask = tf.reverse(logits_mask, axis=[1])
+#    exp_logits_masked = tf.exp(logits) * logits_mask 
     
     # --> e.g. 4 * 11
-    exp_logits_masked = tf.slice(exp_logits_masked, [0, 0], [slice_num, -1])
-    probs = exp_logits_masked / tf.reduce_sum(exp_logits_masked, axis=1, keepdims=True)
+#    exp_logits_masked = tf.slice(exp_logits_masked, [0, 0], [slice_num, -1])
+#    probs = exp_logits_masked / tf.reduce_sum(exp_logits_masked, axis=1, keepdims=True)
     
     # e.g. 4 * 11 * 768
-    input_tensor = tf.slice(input_tensor, [0, 0, 0], [slice_num, -1, -1])
+#    input_tensor = tf.slice(input_tensor, [0, 0, 0], [slice_num, -1, -1])
     
     # 4 * 11 * 1
-    probs = tf.expand_dims(probs, axis=-1)
+#    probs = tf.expand_dims(probs, axis=-1)
     
-    mtl_input = tf.pad(mtl_input, [[0, FLAGS.train_batch_size - slice_num], [0, 0]]) 
-    splits = tf.split(mtl_input, slice_mask, 0)
-    pad_fn = lambda x, num: tf.pad(x, [[FLAGS.max_history_turns - num, 0], [0, 0]])   
-    padded = []
-    for i in range(FLAGS.train_batch_size):
-        padded.append(pad_fn(splits[i], slice_mask[i]))
-    mtl_input = tf.stack(padded, axis=0)
-    mtl_input = tf.slice(mtl_input, [0, 0, 0], [slice_num, -1, -1])
+#    mtl_input = tf.pad(mtl_input, [[0, FLAGS.train_batch_size - slice_num], [0, 0]]) 
+#    splits = tf.split(mtl_input, slice_mask, 0)
+#    pad_fn = lambda x, num: tf.pad(x, [[FLAGS.max_history_turns - num, 0], [0, 0]])   
+#    padded = []
+#    for i in range(FLAGS.train_batch_size):
+#        padded.append(pad_fn(splits[i], slice_mask[i]))
+#    mtl_input = tf.stack(padded, axis=0)
+#    mtl_input = tf.slice(mtl_input, [0, 0, 0], [slice_num, -1, -1])
     
     
     # 4 * 768
-    new_mtl_input = tf.reduce_sum(mtl_input * probs, axis=1)
+#    new_mtl_input = tf.reduce_sum(mtl_input * probs, axis=1)
     
     # after slicing, the shape information is lost, we rest it
-    new_mtl_input.set_shape([None, FLAGS.bert_hidden])
+#    new_mtl_input.set_shape([None, FLAGS.bert_hidden])
     
     
     # 12 * 384 * 768 --> 20 * 384 * 768
-    bert_representation = tf.pad(bert_representation, [[0, FLAGS.train_batch_size - slice_num], [0, 0], [0, 0]])
-    splits = tf.split(bert_representation, slice_mask, 0)
+#    bert_representation = tf.pad(bert_representation, [[0, FLAGS.train_batch_size - slice_num], [0, 0], [0, 0]])
+#    splits = tf.split(bert_representation, slice_mask, 0)
     
-    pad_fn = lambda x, num: tf.pad(x, [[FLAGS.max_history_turns - num, 0], [0, 0], [0, 0]])
+#    pad_fn = lambda x, num: tf.pad(x, [[FLAGS.max_history_turns - num, 0], [0, 0], [0, 0]])
     # padded = tf.map_fn(lambda x: pad_fn(x[0], x[1]), (list(splits), slice_mask), dtype=tf.float32) 
-    padded = []
-    for i in range(FLAGS.train_batch_size):
-        padded.append(pad_fn(splits[i], slice_mask[i]))
+#    padded = []
+#    for i in range(FLAGS.train_batch_size):
+#        padded.append(pad_fn(splits[i], slice_mask[i]))
         
     # --> 12 * 11 * 384 * 768
-    token_tensor = tf.stack(padded, axis=0)
+#    token_tensor = tf.stack(padded, axis=0)
     # --> 4 * 11 * 384 * 768
-    token_tensor = tf.slice(token_tensor, [0, 0, 0, 0], [slice_num, -1, -1, -1])
+#    token_tensor = tf.slice(token_tensor, [0, 0, 0, 0], [slice_num, -1, -1, -1])
     
     # 4 * 11 * 1 * 1
-    probs = tf.expand_dims(probs, axis=-1)
+#    probs = tf.expand_dims(probs, axis=-1)
     
     # 4 * 384 * 768
-    new_bert_representation = tf.reduce_sum(token_tensor * probs, axis=1)
-    new_bert_representation.set_shape([None, FLAGS.max_seq_length, FLAGS.bert_hidden])
+#    new_bert_representation = tf.reduce_sum(token_tensor * probs, axis=1)
+#    new_bert_representation.set_shape([None, FLAGS.max_seq_length, FLAGS.bert_hidden])
+
+#    squeezed_probs = tf.squeeze(probs)
     
-    return new_bert_representation, new_mtl_input, tf.squeeze(probs)
-    
+#    return new_bert_representation, new_mtl_input, squeezed_probs
+
 
 def disable_history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
     

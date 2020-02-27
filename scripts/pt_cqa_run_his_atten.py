@@ -207,9 +207,12 @@ if __name__ == '__main__':
 #    aux_start_positions = tf.placeholder(tf.int32, shape=[None], name='aux_start_positions')
 #    aux_end_positions = tf.placeholder(tf.int32, shape=[None], name='aux_end_positions')
 
-    input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0) #THIS LINE OF CODE IS JUST TO TEST
-    bert_representation, cls_representation = bert_rep(bert_config, input_ids)
-    
+    input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0) #TEST
+    bert_representation, cls_representation = bert_rep(bert_config, input_ids) 
+    for batch in train_batches: #TEST
+        batch_features, batch_slice_mask, batch_slice_num, output_features = batch #TEST
+        break #TEST
+    history_attention_net(bert_representation, cls_representation, cls_representation, [500, 500, 20], batch_slice_num) #TEST  
 
 #    reduce_mean_representation = tf.reduce_mean(bert_representation, axis=1)
 #    reduce_max_representation = tf.reduce_max(bert_representation, axis=1) 
