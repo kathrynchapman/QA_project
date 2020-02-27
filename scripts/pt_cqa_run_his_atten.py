@@ -5,13 +5,14 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import random
 import json
 import math
 import os
 # from bert import modeling
 #import optimization
 import six
-import tensorflow as tf
+
 import numpy as np
 from copy import deepcopy
 import pickle
@@ -28,31 +29,66 @@ from pt_cqa_gen_batches import cqa_gen_example_aware_batches_v2
 # from cqa_rl_supports import *
 from scorer import external_call # quac official evaluation script
 
+def set_seed(args):
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if args.n_gpu > 0:
+        torch.cuda.manual_seed_all(args.seed)
+
+
 if __name__ == '__main__':
 
     parser = ArgumentParser(
         description='QA model')
-    parser.add_argument(
-        '--bert_config_json', '-bert_config_json', help='path to the json file containing the parameters of the BERT model')
-    parser.add_argument(
-        '--do_train', '-do_train', help='string ´yes´ or ´no´, indicating whether to train or not')  
-    parser.add_argument(
-        '--do_predict', '-do_predict', help='string ´yes´ or ´no´, indicating whether to predict or not')  
-    parser.add_argument(
-        '--quac_train_file', '-quac_train_file', help='path to the file contraining the QUAC training dataset') 
-    parser.add_argument(
-        '--quac_val_file', '-quac_val_file', help='path to the file contraining the QUAC validation dataset')     
+    # we can just import the BERT config from the transformer library
+    # parser.add_argument(
+    #     '--bert_config_json', '-bert_config_json', help='path to the json file containing the parameters of the BERT model')
+    parser.add_argument("--cache_dir", default=None, required=True, type=str, help="Where the cached data is (to be) stored.")
+    parser.add_argument("--quac_data_dir", default=None, type=str, help="The input data directory.")
+    parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
+    parser.add_argument('--do_predict', action="store_true", help='Whether to predict or not.')
+    parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
+    parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
+    parser.add_argument("--no_cuda", action="store_true", help="Avoid using CUDA when available")
+    parser.add_argument("--train_steps", type=int, default=20, help="loss: the loss gap on reward set, f1: the f1 on reward set")
+    parser.add_argument("--load_small_portion", action="store_true", help="Load a small portion of data during dev.")
+    parser.add_argument("--max_seq_length", default=384, type=int,help="The maximum total input sequence "
+                                                                       "length after tokenization.")
+    parser.add_argument("--doc_stride", default=128, type=int, help="When splitting up a long document into chunks,"
+                                                                        "how much stride to take between chunks.")
+    parser.add_argument("--max_considered_history_turns", default=11, type=int, help="we only consider k history turns "
+                                "that immediately proceed the current turn, when generating preprocessed features,")
+    parser.add_argument("--warmup_proportion", default=0.0, help="Proportion of training to perform linear "
+                                                                 "learning rate warmup for. E.g., 0.1 = 10% of training.")
     args = parser.parse_args()
 
-    tf.compat.v1.set_random_seed(0) #change to torch.manual_seed(seed)
-    bert_config = BertConfig
+    # Setup CUDA, GPU & distributed training
+    if args.local_rank == -1 or args.no_cuda:
+        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        args.n_gpu = torch.cuda.device_count()
+    else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device("cuda", args.local_rank)
+        torch.distributed.init_process_group(backend="nccl")
+        args.n_gpu = 1
+    args.device = device
+
+    # make the cache dir if it doesn't exist
+    if not os.path.exists(args.cache_dir):
+        os.makedirs(args.cache_dir)
+
+
+    # tf.compat.v1.set_random_seed(0) #change to torch.manual_seed(seed)
+    set_seed(args)
+    bert_config = BertConfig.from_pretrained('bert-large-uncased')
     # bert_config = transformers.BertConfig.from_json_file(args.bert_config_json)
 
-#    if FLAGS.max_seq_length > bert_config.max_position_embeddings:
-#        raise ValueError(
-#            "Cannot use sequence length %d because the BERT model "
-#            "was only trained up to sequence length %d" %
-#            (FLAGS.max_seq_length, bert_config.max_position_embeddings))
+    if args.max_seq_length > bert_config.max_position_embeddings:
+        raise ValueError(
+            "Cannot use sequence length %d because the BERT model "
+            "was only trained up to sequence length %d" %
+            (args.max_seq_length, bert_config.max_position_embeddings))
 
 #    tf.gfile.MakeDirs(FLAGS.output_dir)
 #    tf.gfile.MakeDirs(FLAGS.output_dir + '/summaries/train/')
@@ -69,52 +105,49 @@ if __name__ == '__main__':
 #    if FLAGS.max_seq_length != 384:
 #        FLAGS.cache_dir = FLAGS.cache_dir[:-1] + '_{}/'.format(FLAGS.max_seq_length)
 
-    if args.do_train=='yes':
+    if args.do_train:
         # read in training data, generate training features, and generate training batches
         train_examples = None
         num_train_steps = None
         num_warmup_steps = None
-        train_file = args.quac_train_file
-        train_examples = read_quac_examples(input_file=train_file, is_training=True)[:10] #I SLICED THE LIST TO PROCESS FASTER            
-        
-        # we attempt to read features from cache
-#        features_fname = FLAGS.cache_dir + FLAGS.dataset.lower() + \
-#                        '/train_features_{}_{}.pkl'.format(FLAGS.load_small_portion, FLAGS.max_considered_history_turns)
-#        example_tracker_fname = FLAGS.cache_dir + FLAGS.dataset.lower() + \
-#                        '/example_tracker_{}_{}.pkl'.format(FLAGS.load_small_portion, FLAGS.max_considered_history_turns)
-#        variation_tracker_fname = FLAGS.cache_dir + FLAGS.dataset.lower() + \
-#                        '/variation_tracker_{}_{}.pkl'.format(FLAGS.load_small_portion, FLAGS.max_considered_history_turns)
-#        example_features_nums_fname = FLAGS.cache_dir + FLAGS.dataset.lower() + \
-#                        '/example_features_nums_{}_{}.pkl'.format(FLAGS.load_small_portion, FLAGS.max_considered_history_turns)
-            
-#        try:
-#            print('attempting to load train features from cache')
-#            with open(features_fname, 'rb') as handle:
-#                train_features = pickle.load(handle)
-#            with open(example_tracker_fname, 'rb') as handle:
-#                example_tracker = pickle.load(handle)
-#            with open(variation_tracker_fname, 'rb') as handle:
-#                variation_tracker = pickle.load(handle)
-#            with open(example_features_nums_fname, 'rb') as handle:
-#                example_features_nums = pickle.load(handle)
-#        except:
-        if True: #DELETE THIS LINE AFTER RE-WRITING THE TRY AND EXCEPTION BLOCKS OF CODE
+        train_file = args.quac_data_dir + 'train_v0.2.json' if args.quac_data_dir[-1] == '/' else args.quac_data_dir + '/train_v0.2.json'
+        if args.load_small_portion:
+            train_examples = read_quac_examples(input_file=train_file , is_training=True)[:10]
+        else:
+            train_examples = read_quac_examples(input_file=train_file, is_training=True)
+
+
+        features_fname = args.cache_dir + '/train_features_{}_{}.pkl'.format(args.load_small_portion, args.max_considered_history_turns)
+        example_tracker_fname = args.cache_dir + '/example_tracker_{}_{}.pkl'.format(args.load_small_portion, args.max_considered_history_turns)
+        variation_tracker_fname = args.cache_dir + '/variation_tracker_{}_{}.pkl'.format(args.load_small_portion, args.max_considered_history_turns)
+        example_features_nums_fname = args.cache_dir + '/example_features_nums_{}_{}.pkl'.format(args.load_small_portion, args.max_considered_history_turns)
+        try:
+            print('attempting to load train features from cache')
+            with open(features_fname, 'rb') as handle:
+                train_features = pickle.load(handle)
+            with open(example_tracker_fname, 'rb') as handle:
+                example_tracker = pickle.load(handle)
+            with open(variation_tracker_fname, 'rb') as handle:
+                variation_tracker = pickle.load(handle)
+            with open(example_features_nums_fname, 'rb') as handle:
+                example_features_nums = pickle.load(handle)
+        except:
             print('train feature cache does not exist, generating')
             train_features, example_tracker, variation_tracker, example_features_nums = convert_examples_to_variations_and_then_features(
                                                                 examples=train_examples, tokenizer=tokenizer, 
-                                                                max_seq_length=384, doc_stride=128, 
+                                                                max_seq_length=args.max_seq_length, doc_stride=args.doc_stride,
                                                                 max_query_length=64, 
-                                                                max_considered_history_turns=11, 
+                                                                max_considered_history_turns=args.max_considered_history_turns,
                                                                 is_training=True)
-#            with open(features_fname, 'wb') as handle:
-#                pickle.dump(train_features, handle)
-#            with open(example_tracker_fname, 'wb') as handle:
-#                pickle.dump(example_tracker, handle)
-#            with open(variation_tracker_fname, 'wb') as handle:
-#                pickle.dump(variation_tracker, handle)     
-#            with open(example_features_nums_fname, 'wb') as handle:
-#                pickle.dump(example_features_nums, handle) 
-#            print('train features generated')
+            with open(features_fname, 'wb') as handle:
+                pickle.dump(train_features, handle)
+            with open(example_tracker_fname, 'wb') as handle:
+                pickle.dump(example_tracker, handle)
+            with open(variation_tracker_fname, 'wb') as handle:
+                pickle.dump(variation_tracker, handle)
+            with open(example_features_nums_fname, 'wb') as handle:
+                pickle.dump(example_features_nums, handle)
+            print('train features generated')
                     
         train_batches = cqa_gen_example_aware_batches_v2(train_features, example_tracker, variation_tracker, example_features_nums, 
                                                     batch_size=12, num_epoches=2.0, shuffle=False)
@@ -127,35 +160,37 @@ if __name__ == '__main__':
         # we cannot predict the exact training steps because of the "example-aware" batching, 
         # so we run some initial experiments and found out the exact training steps
         # num_train_steps = 11438 * FLAGS.num_train_epochs
-#        num_train_steps = FLAGS.train_steps
-#        num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)
+        num_train_steps = args.train_steps
+        num_warmup_steps = int(num_train_steps * args.warmup_proportion)
 
-    if args.do_predict=='yes':
+    if args.do_predict:
         # read in validation data, generate val features
-        val_file = args.quac_val_file
-        val_examples = read_quac_examples(input_file=val_file, is_training=False)[:10] #USE THE WHOLE DATASET LATER
-        
+        val_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[-1] == '/' else args.quac_data_dir + '/val_v0.2.json'
+        if args.load_small_portion:
+            val_examples = read_quac_examples(input_file=val_file, is_training=False)[:10] #USE THE WHOLE DATASET LATER
+        else:
+            val_examples = read_quac_examples(input_file=val_file, is_training=False)
+
         # we read in the val file in json for the external_call function in the validation step
         val_file_json = json.load(open(val_file, 'r'))['data']
         
         # we attempt to read features from cache
-#        features_fname = FLAGS.cache_dir + FLAGS.dataset.lower() +                                    '/val_features_{}_{}.pkl'.format(FLAGS.load_small_portion, FLAGS.max_considered_history_turns)
-#        example_tracker_fname = FLAGS.cache_dir + FLAGS.dataset.lower() +                                    '/val_example_tracker_{}_{}.pkl'.format(FLAGS.load_small_portion, FLAGS.max_considered_history_turns)
-#        variation_tracker_fname = FLAGS.cache_dir + FLAGS.dataset.lower() +                                    '/val_variation_tracker_{}_{}.pkl'.format(FLAGS.load_small_portion, FLAGS.max_considered_history_turns)
-#        example_features_nums_fname = FLAGS.cache_dir + FLAGS.dataset.lower() +                                    '/val_example_features_nums_{}_{}.pkl'.format(FLAGS.load_small_portion, FLAGS.max_considered_history_turns)
-            
-#        try:
-#            print('attempting to load val features from cache')
-#            with open(features_fname, 'rb') as handle:
-#                val_features = pickle.load(handle)
-#            with open(example_tracker_fname, 'rb') as handle:
-#                val_example_tracker = pickle.load(handle)
-#            with open(variation_tracker_fname, 'rb') as handle:
-#                val_variation_tracker = pickle.load(handle)
-#            with open(example_features_nums_fname, 'rb') as handle:
-#                val_example_features_nums = pickle.load(handle)
-#        except:
-        if True: #GET RID OF THIS LINE WHEN WE RE-WRITE THESE BLOCKS OF CODE
+        features_fname = args.cache_dir + '/val_features_{}_{}.pkl'.format(args.load_small_portion, args.max_considered_history_turns)
+        example_tracker_fname = args.cache_dir + '/val_example_tracker_{}_{}.pkl'.format(args.load_small_portion, args.max_considered_history_turns)
+        variation_tracker_fname = args.cache_dir + '/val_variation_tracker_{}_{}.pkl'.format(args.load_small_portion, args.max_considered_history_turns)
+        example_features_nums_fname = args.cache_dir + '/val_example_features_nums_{}_{}.pkl'.format(args.load_small_portion, args.max_considered_history_turns)
+
+        try:
+            print('attempting to load val features from cache')
+            with open(features_fname, 'rb') as handle:
+                val_features = pickle.load(handle)
+            with open(example_tracker_fname, 'rb') as handle:
+                val_example_tracker = pickle.load(handle)
+            with open(variation_tracker_fname, 'rb') as handle:
+                val_variation_tracker = pickle.load(handle)
+            with open(example_features_nums_fname, 'rb') as handle:
+                val_example_features_nums = pickle.load(handle)
+        except:
             print('val feature cache does not exist, generating')
             val_features, val_example_tracker, val_variation_tracker, val_example_features_nums =                                                         convert_examples_to_variations_and_then_features(
                                                             examples=val_examples, tokenizer=tokenizer, 
@@ -163,15 +198,15 @@ if __name__ == '__main__':
                                                             max_query_length=64, 
                                                             max_considered_history_turns=11, 
                                                             is_training=False)
-#            with open(features_fname, 'wb') as handle:
-#                pickle.dump(val_features, handle)
-#            with open(example_tracker_fname, 'wb') as handle:
-#                pickle.dump(val_example_tracker, handle)
-#            with open(variation_tracker_fname, 'wb') as handle:
-#                pickle.dump(val_variation_tracker, handle)  
-#            with open(example_features_nums_fname, 'wb') as handle:
-#                pickle.dump(val_example_features_nums, handle)
-#            print('val features generated')
+            with open(features_fname, 'wb') as handle:
+                pickle.dump(val_features, handle)
+            with open(example_tracker_fname, 'wb') as handle:
+                pickle.dump(val_example_tracker, handle)
+            with open(variation_tracker_fname, 'wb') as handle:
+                pickle.dump(val_variation_tracker, handle)
+            with open(example_features_nums_fname, 'wb') as handle:
+                pickle.dump(val_example_features_nums, handle)
+            print('val features generated')
         
         
         num_val_examples = len(val_examples)
