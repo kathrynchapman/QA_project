@@ -41,10 +41,12 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(
         description='QA model')
-    # we can just import the BERT config from the transformer library
-    # parser.add_argument(
-    #     '--bert_config_json', '-bert_config_json', help='path to the json file containing the parameters of the BERT model')
-    parser.add_argument("--cache_dir", default=None, required=True, type=str, help="Where the cached data is (to be) stored.")
+
+    parser.add_argument("--cache_dir", default=None, required=True, type=str,
+                        help="Where the cached data is (to be) stored.")
+    parser.add_argument("--output_dir", default=None, required=True, type=str,
+                        help="Where the model output data is (to be) stored.")
+    parser.add_argument("--overwrite_output_dir", action="store_true", help="Whether to overwrite the outputs directory")
     parser.add_argument("--quac_data_dir", default=None, type=str, help="The input data directory.")
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument('--do_predict', action="store_true", help='Whether to predict or not.')
@@ -62,6 +64,7 @@ if __name__ == '__main__':
     parser.add_argument("--warmup_proportion", default=0.0, help="Proportion of training to perform linear "
                                                                  "learning rate warmup for. E.g., 0.1 = 10% of training.")
     args = parser.parse_args()
+    args.output_dir = args.output_dir + '/' if args.output_dir[-1] != '/' else args.output_dir
 
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
@@ -74,15 +77,11 @@ if __name__ == '__main__':
         args.n_gpu = 1
     args.device = device
 
-    # make the cache dir if it doesn't exist
-    if not os.path.exists(args.cache_dir):
-        os.makedirs(args.cache_dir)
 
-
-    # tf.compat.v1.set_random_seed(0) #change to torch.manual_seed(seed)
+    # set the seed for initialization
     set_seed(args)
+    # get the BERT config using huggingface
     bert_config = BertConfig.from_pretrained('bert-large-uncased')
-    # bert_config = transformers.BertConfig.from_json_file(args.bert_config_json)
 
     if args.max_seq_length > bert_config.max_position_embeddings:
         raise ValueError(
@@ -90,10 +89,26 @@ if __name__ == '__main__':
             "was only trained up to sequence length %d" %
             (args.max_seq_length, bert_config.max_position_embeddings))
 
-#    tf.gfile.MakeDirs(FLAGS.output_dir)
-#    tf.gfile.MakeDirs(FLAGS.output_dir + '/summaries/train/')
-#    tf.gfile.MakeDirs(FLAGS.output_dir + '/summaries/val/')
-#    tf.gfile.MakeDirs(FLAGS.output_dir + '/summaries/rl/')
+
+    # make the cache dir if it doesn't exist
+    if not os.path.exists(args.cache_dir):
+        os.makedirs(args.cache_dir)
+    if (
+        os.path.exists(args.output_dir)
+        and os.listdir(args.output_dir)
+        and args.do_train
+        and not args.overwrite_output_dir
+    ):
+        raise ValueError(
+            "Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(
+                args.output_dir
+            )
+        )
+    if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
+        os.makedirs(args.output_dir)
+        os.makedirs(args.output_dir + '/summaries/train/')
+        os.makedirs(args.output_dir + '/summaries/val/')
+        os.makedirs(args.output_dir + '/summaries/rl/')
 
     tokenizer = BertTokenizer.from_pretrained('bert-large-uncased')
 
@@ -194,10 +209,11 @@ if __name__ == '__main__':
             print('val feature cache does not exist, generating')
             val_features, val_example_tracker, val_variation_tracker, val_example_features_nums =                                                         convert_examples_to_variations_and_then_features(
                                                             examples=val_examples, tokenizer=tokenizer, 
-                                                            max_seq_length=384, doc_stride=128, 
+                                                            max_seq_length=args.max_seq_length, doc_stride=args.doc_stride,
                                                             max_query_length=64, 
-                                                            max_considered_history_turns=11, 
+                                                            max_considered_history_turns=args.max_considered_history_turns,
                                                             is_training=False)
+
             with open(features_fname, 'wb') as handle:
                 pickle.dump(val_features, handle)
             with open(example_tracker_fname, 'wb') as handle:
@@ -211,15 +227,17 @@ if __name__ == '__main__':
         
         num_val_examples = len(val_examples)
 
-#PYTORCH DOES NOT USE PLACEHOLDERS AS TENSORFLOW, WE HAVE TO FIND A WAY OF ADAPTING THIS BLOCK OF CODE FOR PYTORCH.
-#GOOD EXPLANATION: Tensorflow works on a static graph concept that means the user first has to define the computation
-#graph of the model and then run the ML model, whereas PyTorch believes in a dynamic graph that allows defining/manipulating
-#the graph on the go. PyTorch offers an advantage with its dynamic nature of creating the graphs.
-#This placeholders approach is actually from an old version of TensorFlow, the new one is more similar to Pytorch.
-#Because it is a deprecated version of TensorFlow, I had to add the compat.v1 line at the beginning of this block of code to make it work.
-#Even so, I kept running into compatibility issues and in the end I just gave up and relied on the documentation of tensorflow,
-#bert and pytorch to make something equivalent. I was not able to run it both with tensorflow (original) and pytorch (my version)
-#to check if the output is exactly the same.      
+
+# PYTORCH DOES NOT USE PLACEHOLDERS AS TENSORFLOW, WE HAVE TO FIND A WAY OF ADAPTING THIS BLOCK OF CODE FOR PYTORCH.
+# GOOD EXPLANATION: Tensorflow works on a static graph concept that means the user first has to define the computation
+# graph of the model and then run the ML model, whereas PyTorch believes in a dynamic graph that allows defining/manipulating
+# the graph on the go. PyTorch offers an advantage with its dynamic nature of creating the graphs.
+# This placeholders approach is actually from an old version of TensorFlow, the new one is more similar to Pytorch.
+# Because it is a deprecated version of TensorFlow, I had to add the compat.v1 line at the beginning of this block of code to make it work.
+# Even so, I kept running into compatibility issues and in the end I just gave up and relied on the documentation of tensorflow,
+# bert and pytorch to make something equivalent. I was not able to run it both with tensorflow (original) and pytorch (my version)
+# to check if the output is exactly the same.
+
 
     # tf Graph input
 #    tf.compat.v1.disable_eager_execution()
