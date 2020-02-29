@@ -18,6 +18,9 @@ To-do:
 	- fine_grained_history_attention_net 		(1)
 
 
+to run main script from within the 'script' directory: (29.02.2020)
+python pt_cqa_run_his_atten.py --do_train --quac_data_dir ../data/ --cache_dir ../data/practice --load_small_portion --do_predict --output_dir ../exps_dir
+
 Note for Kathryn: Did you run the original code? It looks a bit messy in some parts, as if they tried different functions and versions and forgot
 to clean it up before setting the definite github repository. I started to wonder if it works at all...
 
