@@ -18,7 +18,7 @@ To-do:
 	- fine_grained_history_attention_net 		(1)
 
 
-to run main script from within the 'script' directory: (29.02.2020)
+to run main script from within the 'script' directory: (29.02.2020) <br>
 python pt_cqa_run_his_atten.py --do_train --quac_data_dir ../data/ --cache_dir ../data/practice --load_small_portion --do_predict --output_dir ../exps_dir
 
 Note for Kathryn: Did you run the original code? It looks a bit messy in some parts, as if they tried different functions and versions and forgot
