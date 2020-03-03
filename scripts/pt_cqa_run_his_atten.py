@@ -125,7 +125,7 @@ if __name__ == '__main__':
         train_examples = None
         num_train_steps = None
         num_warmup_steps = None
-        train_file = args.quac_data_dir + 'train_v0.2.json' if args.quac_data_dir[-1] == '/' else args.quac_data_dir + '/train_v0.2.json'
+        train_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[-1] == '/' else args.quac_data_dir + '/val_v0.2.json' #CHANGED TO VAL ONLY FOR TESTING
         if args.load_small_portion:
             train_examples = read_quac_examples(input_file=train_file , is_training=True)[:10]
         else:
@@ -266,7 +266,7 @@ if __name__ == '__main__':
     for batch in train_batches: #TEST
         batch_features, batch_slice_mask, batch_slice_num, output_features = batch #TEST
         break #TEST
-    history_attention_net(bert_representation, cls_representation, cls_representation, [500, 500, 20], batch_slice_num) #TEST  
+    history_attention_net(bert_representation, cls_representation, cls_representation, [500, 500, 19], batch_slice_num) #TEST  
 
 #    reduce_mean_representation = tf.reduce_mean(bert_representation, axis=1)
 #    reduce_max_representation = tf.reduce_max(bert_representation, axis=1) 

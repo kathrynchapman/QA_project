@@ -109,9 +109,9 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     :return new_mtl_input: 
     :return squeezed probs:
     """
-    
+
     # 12 * 768 --> e.g. 20 * 768
-    padding = torch.nn.ZeroPad2d((0, 0, 0, 1024-slice_num)) #bert_hidden_units=1024, padding at the bottom
+    padding = torch.nn.ZeroPad2d((0, 0, 0, 1024-slice_num)) #bert_hidden=1024, padding at the bottom
     history_attention_input = padding(history_attention_input)
     
     # the splits contains 12 feature groups. e.g. the first might be 4 * 768 (the number 4 is just an example)
@@ -127,24 +127,60 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
         padded.append(pad_fn(splits[i], slice_mask[i]))
     
     # --> 12 * 11 * 768
-#    input_tensor = tf.stack(padded, axis=0)
-#    input_tensor.set_shape([FLAGS.train_batch_size, FLAGS.max_history_turns, FLAGS.bert_hidden])
-    
+    input_tensor = torch.stack(padded, axis=0)
+    print(input_tensor.shape) #GET RID OF THIS LINE LATER, IT'S TO KEEP TRACK OF DIMENSIONS
+    #I think there is no need to include the following line of code when we use pytorch
+    #There's a complete explanation of how tf.tensor.set_shape() works here: 
+    #https://stackoverflow.com/questions/35451948/clarification-on-tf-tensor-set-shape
+    #input_tensor.set_shape([FLAGS.train_batch_size, FLAGS.max_history_turns, FLAGS.bert_hidden])
 #    if FLAGS.history_attention_hidden:
-#        hidden = tf.layers.dense(input_tensor, 100, activation=tf.nn.relu,
-#                kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_hidden')
-#        logits = tf.layers.dense(hidden, 1, activation=None,
-#                kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_model')
-#    else:
+    #Good explanation of dimensions: https://mc.ai/pytorch-layer-dimensions-what-sizes-should-they-be-and-why/
+    if not True:
+        #Create network layers
+        layer_linear1 = torch.nn.Linear(input_tensor.shape[2], 100)
+        torch.nn.init.normal_(layer_linear1.weight, std=0.02) #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
+        layer_relu = torch.nn.ReLU()
+        layer_linear2 = torch.nn.Linear(100, 1)
+        torch.nn.init.normal_(layer_linear2.weight, std=0.02) #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
+        #Do the forward pass
+        logits = layer_linear1(input_tensor)
+        logits = layer_relu(logits)
+        print(logits.shape) #GET RID OF THIS LINE LATER, IT'S TO KEEP TRACK OF DIMENSIONS
+        logits = layer_linear2(logits)
+        print(logits.shape) #GET RID OF THIS LINE LATER, IT'S TO KEEP TRACK OF DIMENSIONS
+    if True:
         # --> 12 * 11 * 1
-#        logits = tf.layers.dense(input_tensor, 1, activation=None,
-#                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.02), name='history_attention_model')
+        #Create network layers
+        layer_linear = torch.nn.Linear(input_tensor.shape[2], 1)
+        torch.nn.init.normal_(layer_linear.weight, std=0.02) #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)        
+        #Do the forward pass
+        logits =  layer_linear(input_tensor)
+        print(logits.shape)
     # --> 12 * 11
-#    logits = tf.squeeze(logits, axis=2)
+    logits = torch.squeeze(logits, dim=2)
     
     # mask: 12 * 11
-#    logits_mask = tf.sequence_mask(slice_mask, FLAGS.max_history_turns, dtype=tf.float32)
-#    logits_mask = tf.reverse(logits_mask, axis=[1])
+    logits_mask = tf.sequence_mask(slice_mask, 11, dtype=tf.float32)
+    print(logits_mask)
+
+    def sequence_mask(lengths, maxlen, dtype=torch.float32):
+        if maxlen is None:
+            maxlen = lengths.max()
+        mask = ~(torch.ones((len(lengths), maxlen)).cumsum(dim=1).t() > lengths).t()
+        print(torch.ones((len(lengths), maxlen)))
+        #mask.type(dtype)
+        return mask
+    logits_mask = sequence_mask(torch.tensor([1, 3, 2]), 5)
+    print(logits_mask)
+
+    def flip(x, dim):
+        indices = [slice(None)] * x.dim()
+        indices[dim] = torch.arange(x.size(dim) - 1, -1, -1,
+                                    dtype=torch.long, device=x.device)
+        return x[tuple(indices)]
+
+#    logits_mask = flip(logits_mask, 1)
+#    print(logits)
 #    exp_logits_masked = tf.exp(logits) * logits_mask 
     
     # --> e.g. 4 * 11
