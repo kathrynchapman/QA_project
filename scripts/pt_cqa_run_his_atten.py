@@ -266,7 +266,7 @@ if __name__ == '__main__':
     for batch in train_batches: #TEST
         batch_features, batch_slice_mask, batch_slice_num, output_features = batch #TEST
         break #TEST
-    history_attention_net(bert_representation, cls_representation, cls_representation, [500, 500, 19], batch_slice_num) #TEST  
+    history_attention_net(bert_representation, cls_representation, cls_representation, [500, 500, 23], 2) #TEST  
 
 #    reduce_mean_representation = tf.reduce_mean(bert_representation, axis=1)
 #    reduce_max_representation = tf.reduce_max(bert_representation, axis=1) 
