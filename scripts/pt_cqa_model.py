@@ -112,7 +112,7 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     """
 
     # 12 * 768 --> e.g. 20 * 768
-    padding = torch.nn.ZeroPad2d((0, 0, 0, 1024-slice_num)) #bert_hidden=1024, padding at the bottom
+    padding = torch.nn.ZeroPad2d((0, 0, 0, 12-slice_num)) #train_batch_size=12, padding at the bottom
     history_attention_input = padding(history_attention_input)
     
     # the splits contains 12 feature groups. e.g. the first might be 4 * 768 (the number 4 is just an example)
@@ -124,7 +124,7 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
         return padding(x) 
         
     padded = []
-    for i in range(3): #train_batch_size=12, but ie used 3 for my mini-example
+    for i in range(3): #train_batch_size=12, but i used 3 for my mini-example
         padded.append(pad_fn(splits[i], slice_mask[i]))
     
     # --> 12 * 11 * 768
@@ -188,18 +188,18 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     probs = exp_logits_masked / torch.sum(exp_logits_masked, dim=1, keepdim=True)
     
     # e.g. 4 * 11 * 768
-#    input_tensor = tf.slice(input_tensor, [0, 0, 0], [slice_num, -1, -1])
+    input_tensor = input_tensor[:slice_num, :, :]
     
     # 4 * 11 * 1
-#    probs = tf.expand_dims(probs, axis=-1)
-    
-#    mtl_input = tf.pad(mtl_input, [[0, FLAGS.train_batch_size - slice_num], [0, 0]]) 
-#    splits = tf.split(mtl_input, slice_mask, 0)
-#    pad_fn = lambda x, num: tf.pad(x, [[FLAGS.max_history_turns - num, 0], [0, 0]])   
-#    padded = []
-#    for i in range(FLAGS.train_batch_size):
-#        padded.append(pad_fn(splits[i], slice_mask[i]))
-#    mtl_input = tf.stack(padded, axis=0)
+    probs = torch.unsqueeze(probs, dim=-1)
+
+    padding = torch.nn.ZeroPad2d((0, 0, 0, 12-slice_num)) ##train_batch_size=12, padding at the bottom
+    mtl_input = padding(mtl_input)
+    splits = torch.split(mtl_input, slice_mask, 0) 
+    padded = []
+    for i in range(3): #train_batch_size=12, but i used 3 for my mini-example
+        padded.append(pad_fn(splits[i], slice_mask[i]))
+    mtl_input = torch.stack(padded, axis=0)
 #    mtl_input = tf.slice(mtl_input, [0, 0, 0], [slice_num, -1, -1])
     
     
