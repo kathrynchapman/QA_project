@@ -135,7 +135,7 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     #input_tensor.set_shape([FLAGS.train_batch_size, FLAGS.max_history_turns, FLAGS.bert_hidden])
 #    if FLAGS.history_attention_hidden:
     #Good explanation of dimensions: https://mc.ai/pytorch-layer-dimensions-what-sizes-should-they-be-and-why/
-    if not True:
+    if not True: #TEST, original is with flags
         #Create network layers
         layer_linear1 = torch.nn.Linear(input_tensor.shape[2], 100)
         torch.nn.init.normal_(layer_linear1.weight, std=0.02) #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
@@ -146,7 +146,7 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
         logits = layer_linear1(input_tensor)
         logits = layer_relu(logits)
         logits = layer_linear2(logits)
-    if True:
+    if True: #TEST, original is with flags
         # --> 12 * 11 * 1
         #Create network layers
         layer_linear = torch.nn.Linear(input_tensor.shape[2], 1)
@@ -200,41 +200,44 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     for i in range(3): #train_batch_size=12, but i used 3 for my mini-example
         padded.append(pad_fn(splits[i], slice_mask[i]))
     mtl_input = torch.stack(padded, axis=0)
-#    mtl_input = tf.slice(mtl_input, [0, 0, 0], [slice_num, -1, -1])
-    
+    mtl_input = mtl_input[:slice_num, :, :]    
     
     # 4 * 768
-#    new_mtl_input = tf.reduce_sum(mtl_input * probs, axis=1)
+    new_mtl_input = torch.sum(mtl_input * probs, dim=1)
     
     # after slicing, the shape information is lost, we rest it
+    #I THINK THIS LINE IS NOT NECESSARY IN OUR PYTORCH IMPLEMENTATION
 #    new_mtl_input.set_shape([None, FLAGS.bert_hidden])
     
-    
-    # 12 * 384 * 768 --> 20 * 384 * 768
-#    bert_representation = tf.pad(bert_representation, [[0, FLAGS.train_batch_size - slice_num], [0, 0], [0, 0]])
-#    splits = tf.split(bert_representation, slice_mask, 0)
-    
-#    pad_fn = lambda x, num: tf.pad(x, [[FLAGS.max_history_turns - num, 0], [0, 0], [0, 0]])
-    # padded = tf.map_fn(lambda x: pad_fn(x[0], x[1]), (list(splits), slice_mask), dtype=tf.float32) 
-#    padded = []
-#    for i in range(FLAGS.train_batch_size):
-#        padded.append(pad_fn(splits[i], slice_mask[i]))
+    # 12 * 384 * 768 --> 20 * 384 * 768   
+    bert_representation = torch.nn.functional.pad(bert_representation, (0, 0, 0, 0, 0, 12-slice_num)) ##train_batch_size=12, padding at the back
+    splits = torch.split(bert_representation, slice_mask, 0) 
+
+    pad_fn = lambda x, num: torch.nn.functional.pad(x, (0, 0, 12-num, 0, 0, 0)) #train_batch_size=12, padding at the top
+    padded = []
+    for i in range(3): #train_batch_size=12, but i used 3 for my mini-example
+        padded.append(pad_fn(splits[i], slice_mask[i]))
+
+    for index, tensor in enumerate(padded): #TEST
+        padded[index] = tensor[:2, :15, :] #TEST
         
     # --> 12 * 11 * 384 * 768
-#    token_tensor = tf.stack(padded, axis=0)
+    token_tensor = torch.stack(padded, axis=0)
     # --> 4 * 11 * 384 * 768
-#    token_tensor = tf.slice(token_tensor, [0, 0, 0, 0], [slice_num, -1, -1, -1])
+    token_tensor = token_tensor[:slice_num, :, :, :]
     
     # 4 * 11 * 1 * 1
-#    probs = tf.expand_dims(probs, axis=-1)
+    probs = torch.unsqueeze(probs, dim=-1)
     
     # 4 * 384 * 768
-#    new_bert_representation = tf.reduce_sum(token_tensor * probs, axis=1)
+    probs = probs[:, :2, :, :] #TEST
+    new_bert_representation = torch.sum(token_tensor * probs, dim=1)
+#    Following line is not necessary in PyTorch:
 #    new_bert_representation.set_shape([None, FLAGS.max_seq_length, FLAGS.bert_hidden])
 
-#    squeezed_probs = tf.squeeze(probs)
+    squeezed_probs = torch.squeeze(probs)
     
-#    return new_bert_representation, new_mtl_input, squeezed_probs
+    return new_bert_representation, new_mtl_input, squeezed_probs
 
 
 def disable_history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
