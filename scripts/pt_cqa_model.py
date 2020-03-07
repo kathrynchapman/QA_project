@@ -18,28 +18,46 @@ import numpy #TEST
 
 
 from transformers import BertPreTrainedModel
-from transformers.modeling_bert import BERT_PRETRAINED_MODEL_ARCHIVE_MAP, BertModel, \
-    BERT_INPUTS_DOCSTRING, BERT_START_DOCSTRING
+# from transformers.modeling_bert import BERT_PRETRAINED_MODEL_ARCHIVE_MAP, BertModel, \
+#     BERT_INPUTS_DOCSTRING, BERT_START_DOCSTRING
 from transformers import BertConfig, BertTokenizer
+from bert_model import BertModel
+
+# def bert_rep(bert_config, input_ids):
+#     """
+#     :param bert_config: 'BertConfig' instance
+#     :param input_ids: torch.LongTensor of shape (batch_size, sequence_length),
+#         indices of input sequence tokens in the vocabulary, which can be obtained using transformers.BertTokenizer
+#     :return final_hidden: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size),
+#         sequence of hidden-states at the output of the last layer of the model
+#     :return sent_rep: torch.FloatTensor of shape (batch_size, hidden_size),
+#         last layer hidden-state of the first token of the sequence (classification token) further processed by
+#         a Linear layer and a Tanh activation function
+#     """
+#
+#     # model = transformers.BertModel(config=bert_config,)
+#     model = BertModel.from_pretrained('bert-large-cased')
+#     outputs = model(input_ids)
+#     final_hidden = model(input_ids)[0]
+#     sent_rep = model(input_ids)[1]
+#
+#     return final_hidden, sent_rep
 
 
-def bert_rep(bert_config, input_ids):
-    """
-    :param bert_config: 'BertConfig' instance
-    :param input_ids: torch.LongTensor of shape (batch_size, sequence_length), 
-        indices of input sequence tokens in the vocabulary, which can be obtained using transformers.BertTokenizer
-    :return final_hidden: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size), 
-        sequence of hidden-states at the output of the last layer of the model
-    :return sent_rep: torch.FloatTensor of shape (batch_size, hidden_size), 
-        last layer hidden-state of the first token of the sequence (classification token) further processed by 
-        a Linear layer and a Tanh activation function
-    """
+def bert_rep(bert_config, is_training, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings):
+    model = BertModel.from_pretrained('bert-large-cased')
+    inputs = (
+        config=bert_config,
+        input_ids=input_ids,
+        input_mask=input_mask,
+        token_type_ids=segment_ids,
+        history_answer_marker=history_answer_marker,
+        )
 
-    # model = transformers.BertModel(config=bert_config,)
-    model = BertModel.from_pretrained('bert-base-cased')
-    final_hidden = model(input_ids)[0]
-    sent_rep = model(input_ids)[1]
+    outputs = model(**inputs)
 
+    final_hidden = outputs[0]
+    sent_rep = outputs[1]
     return final_hidden, sent_rep
 
 
@@ -97,7 +115,7 @@ def yesno_model(sent_rep):
     return logits
 
 
-def history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
+def history_attention_net(args, bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
     """
     :param bert_representation: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size), 
         sequence of hidden-states at the output of the last layer of the model
@@ -116,15 +134,19 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     history_attention_input = padding(history_attention_input)
     
     # the splits contains 12 feature groups. e.g. the first might be 4 * 768 (the number 4 is just an example)
+    print(history_attention_input.shape)
     splits = torch.split(history_attention_input, slice_mask, 0)
-    
+    print(len(splits))
+    print(splits[0].shape)
+    print(splits[1].shape)
+    # print(splits)
     # --> 11 * 768
     def pad_fn(x, num):
         padding = torch.nn.ZeroPad2d((0, 0, 11-num, 0)) #max_history_turns=11, padding at the top
         return padding(x) 
         
     padded = []
-    for i in range(3): #train_batch_size=12, but i used 3 for my mini-example
+    for i in range(args.batch_size): #train_batch_size=12, but i used 3 for my mini-example
         padded.append(pad_fn(splits[i], slice_mask[i]))
     
     # --> 12 * 11 * 768
@@ -135,7 +157,7 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     #input_tensor.set_shape([FLAGS.train_batch_size, FLAGS.max_history_turns, FLAGS.bert_hidden])
 #    if FLAGS.history_attention_hidden:
     #Good explanation of dimensions: https://mc.ai/pytorch-layer-dimensions-what-sizes-should-they-be-and-why/
-    if not True: #TEST, original is with flags
+    if True: #TEST, original is with flags
         #Create network layers
         layer_linear1 = torch.nn.Linear(input_tensor.shape[2], 100)
         torch.nn.init.normal_(layer_linear1.weight, std=0.02) #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
@@ -146,7 +168,7 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
         logits = layer_linear1(input_tensor)
         logits = layer_relu(logits)
         logits = layer_linear2(logits)
-    if True: #TEST, original is with flags
+    if not True: #TEST, original is with flags
         # --> 12 * 11 * 1
         #Create network layers
         layer_linear = torch.nn.Linear(input_tensor.shape[2], 1)
@@ -180,8 +202,12 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
         return x[tuple(indices)]
 
     logits_mask = sequence_mask(torch.tensor(slice_mask), 11)
+
+
     logits_mask = flip(logits_mask, 1)
-    exp_logits_masked = torch.exp(logits) * logits_mask 
+
+    exp_logits_masked = torch.exp(logits) * logits_mask
+    # exp_logits_masked = torch.mul(torch.exp(logits) * logits_mask)
     
     # --> e.g. 4 * 11
     exp_logits_masked = exp_logits_masked[:slice_num, :]
@@ -197,7 +223,7 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     mtl_input = padding(mtl_input)
     splits = torch.split(mtl_input, slice_mask, 0) 
     padded = []
-    for i in range(3): #train_batch_size=12, but i used 3 for my mini-example
+    for i in range(args.batch_size): #train_batch_size=12, but i used 3 for my mini-example
         padded.append(pad_fn(splits[i], slice_mask[i]))
     mtl_input = torch.stack(padded, axis=0)
     mtl_input = mtl_input[:slice_num, :, :]    
@@ -218,8 +244,8 @@ def history_attention_net(bert_representation, history_attention_input, mtl_inpu
     for i in range(3): #train_batch_size=12, but i used 3 for my mini-example
         padded.append(pad_fn(splits[i], slice_mask[i]))
 
-    for index, tensor in enumerate(padded): #TEST
-        padded[index] = tensor[:2, :15, :] #TEST
+    # for index, tensor in enumerate(padded): #TEST
+    #     padded[index] = tensor[:2, :15, :] #TEST
         
     # --> 12 * 11 * 384 * 768
     token_tensor = torch.stack(padded, axis=0)

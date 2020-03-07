@@ -288,6 +288,9 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         # query_tokens = tokenizer.tokenize(example.question_text)
         query_tokens = tokenizer.tokenize(text=example.question_text)
 
+        input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(
+            0)  # TEST
+
         if len(query_tokens) > max_query_length:
             query_tokens = query_tokens[0:max_query_length]
         
@@ -949,34 +952,69 @@ def convert_examples_to_example_variations(examples, max_considered_history_turn
              
     return new_examples    
     
+# def convert_features_to_feed_dict(features):
+#     batch_unique_ids, batch_input_ids, batch_input_mask = [], [], []
+#     batch_segment_ids, batch_start_positions, batch_end_positions, batch_history_answer_marker = [], [], [], []
+#     batch_yesno, batch_followup = [], []
+#     batch_metadata = []
+#
+#     yesno_dict = {'y': 0, 'n': 1, 'x': 2}
+#     followup_dict = {'y': 0, 'n': 1, 'm': 2}
+#
+#     for feature in features:
+#         batch_unique_ids.append(feature.unique_id)
+#         batch_input_ids.append(feature.input_ids)
+#         batch_input_mask.append(feature.input_mask)
+#         batch_segment_ids.append(feature.segment_ids)
+#         batch_start_positions.append(feature.start_position)
+#         batch_start_positions.append(feature.start_position)
+#         batch_end_positions.append(feature.end_position)
+#         batch_history_answer_marker.append(feature.history_answer_marker)
+#         batch_yesno.append(yesno_dict[feature.metadata['yesno']])
+#         batch_followup.append(followup_dict[feature.metadata['followup']])
+#         batch_metadata.append(feature.metadata)
+#
+#     feed_dict = {'unique_ids': batch_unique_ids, 'input_ids': batch_input_ids,
+#               'input_mask': batch_input_mask, 'segment_ids': batch_segment_ids,
+#               'start_positions': batch_start_positions, 'end_positions': batch_end_positions,
+#               'history_answer_marker': batch_history_answer_marker, 'yesno': batch_yesno, 'followup': batch_followup,
+#               'metadata': batch_metadata}
+#     return feed_dict
+
+
 def convert_features_to_feed_dict(features):
-    batch_unique_ids, batch_input_ids, batch_input_mask = [], [], []
-    batch_segment_ids, batch_start_positions, batch_end_positions, batch_history_answer_marker = [], [], [], []
-    batch_yesno, batch_followup = [], []
+    batch_unique_ids, batch_input_ids, batch_input_mask = [], torch.LongTensor([]), torch.LongTensor([])
+    batch_segment_ids, batch_start_positions, batch_end_positions, batch_history_answer_marker = \
+        torch.LongTensor([]), torch.LongTensor([]), torch.LongTensor([]), torch.LongTensor([])
+    batch_yesno, batch_followup = torch.LongTensor([]), torch.LongTensor([])
     batch_metadata = []
-    
+
     yesno_dict = {'y': 0, 'n': 1, 'x': 2}
     followup_dict = {'y': 0, 'n': 1, 'm': 2}
-    
+
     for feature in features:
+        # batch_unique_ids = torch.cat((batch_unique_ids, torch.tensor(feature.unique_id)), 0)
         batch_unique_ids.append(feature.unique_id)
-        batch_input_ids.append(feature.input_ids)
-        batch_input_mask.append(feature.input_mask)
-        batch_segment_ids.append(feature.segment_ids)
-        batch_start_positions.append(feature.start_position)
-        batch_start_positions.append(feature.start_position)
-        batch_end_positions.append(feature.end_position)
-        batch_history_answer_marker.append(feature.history_answer_marker)
-        batch_yesno.append(yesno_dict[feature.metadata['yesno']])
-        batch_followup.append(followup_dict[feature.metadata['followup']])
+        batch_input_ids = torch.cat((batch_input_ids,torch.LongTensor([feature.input_ids])), 0)
+        batch_input_mask = torch.cat((batch_input_mask,torch.LongTensor([feature.input_mask])), 0)
+        batch_segment_ids = torch.cat((batch_segment_ids, torch.LongTensor([feature.segment_ids])), 0)
+        batch_start_positions = torch.cat((batch_start_positions, torch.LongTensor([feature.start_position])), 0)
+        batch_start_positions = torch.cat((batch_start_positions, torch.LongTensor([feature.start_position])), 0)
+        batch_end_positions = torch.cat((batch_end_positions,torch.LongTensor([feature.end_position])), )
+        batch_history_answer_marker = torch.cat((batch_history_answer_marker, torch.LongTensor([feature.history_answer_marker])), 0)
+        batch_yesno = torch.cat((batch_yesno, torch.LongTensor([yesno_dict[feature.metadata['yesno']]])), 0)
+        batch_followup = torch.cat((batch_followup, torch.LongTensor([followup_dict[feature.metadata['followup']]])), 0)
         batch_metadata.append(feature.metadata)
-    
-    feed_dict = {'unique_ids': batch_unique_ids, 'input_ids': batch_input_ids, 
-              'input_mask': batch_input_mask, 'segment_ids': batch_segment_ids, 
-              'start_positions': batch_start_positions, 'end_positions': batch_end_positions, 
-              'history_answer_marker': batch_history_answer_marker, 'yesno': batch_yesno, 'followup': batch_followup, 
-              'metadata': batch_metadata}
-    return feed_dict    
+        # batch_metadata = torch.cat((batch_metadata, torch.Tensor(feature.metadata)), 0)
+
+    feed_dict = {'unique_ids': batch_unique_ids, 'input_ids': batch_input_ids,
+                 'input_mask': batch_input_mask, 'segment_ids': batch_segment_ids,
+                 'start_positions': batch_start_positions, 'end_positions': batch_end_positions,
+                 'history_answer_marker': batch_history_answer_marker, 'yesno': batch_yesno, 'followup': batch_followup,
+                 'metadata': batch_metadata}
+    return feed_dict
+
+# x = torch.cat((x, out), 0)
     
     
 def get_turn_features(metadata):
@@ -1001,7 +1039,7 @@ if __name__ == '__main__':
 
     examples = read_quac_examples(args.train_file, is_training=False)
 
-    our_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    our_tokenizer = BertTokenizer.from_pretrained('bert-large-cased')
 
     examples = examples[:10]
 
@@ -1010,6 +1048,8 @@ if __name__ == '__main__':
         convert_examples_to_variations_and_then_features(examples, tokenizer=our_tokenizer, max_seq_length=384, doc_stride=128,
                                                             max_query_length=64, max_considered_history_turns=11,
                                                             is_training=False)
+
+    # cqa_gen_example_aware_batches_v2
                                                             
 
 
