@@ -211,6 +211,8 @@ if __name__ == '__main__':
                 fd = convert_features_to_feed_dict(batch_features)  # feed_dict
                 fd_output = convert_features_to_feed_dict(output_features)
 
+                ## the below is just for my reference to know what's in the feed dict - kathryn
+
                 # feed_dict = {'unique_ids': batch_unique_ids, 'input_ids': batch_input_ids,
                 #              'input_mask': batch_input_mask, 'segment_ids': batch_segment_ids,
                 #              'start_positions': batch_start_positions, 'end_positions': batch_end_positions,
@@ -230,11 +232,16 @@ if __name__ == '__main__':
                 history_attention_input = reduce_mean_representation
                 mtl_input = reduce_mean_representation
                 (aux_start_logits, aux_end_logits) = cqa_model(bert_representation)
+                # the next line causes the code to crash - I think we need to figure out this step before proceeding
                 new_bert_representation, new_mtl_input, attention_weights = history_attention_net(args, bert_representation,
                                                                                                   history_attention_input,
                                                                                                   mtl_input,
                                                                                                   batch_slice_mask,
                                                                                                   batch_slice_num)
+                # yesno_logits = yesno_model(new_mtl_input)
+                # followup_logits = followup_model(new_mtl_input)
+                # (start_logits, end_logits) = cqa_model(new_bert_representation)
+
 
                 print("Done with batch", step)
 

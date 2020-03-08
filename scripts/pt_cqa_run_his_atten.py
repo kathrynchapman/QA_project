@@ -326,8 +326,8 @@ if __name__ == '__main__':
 #                                                                                            slice_num)
 
 #        else:
-    slice_mask = [0] * args.batch_size
-    slice_num = 0
+#     slice_mask = [0] * args.batch_size
+#     slice_num = 0
     new_bert_representation, new_mtl_input, attention_weights = history_attention_net(bert_representation,
                                                                                       history_attention_input,
                                                                                       mtl_input,

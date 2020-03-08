@@ -35,6 +35,7 @@ class BertEmbeddings(nn.Module):
             input_shape = input_ids.size()
         else:
             input_shape = inputs_embeds.size()[:-1]
+        print(input_shape)
 
         seq_length = input_shape[1]
         device = input_ids.device if input_ids is not None else inputs_embeds.device
@@ -44,7 +45,7 @@ class BertEmbeddings(nn.Module):
         if token_type_ids is None:
             token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
         if history_answer_marker is None:
-            history_answer_ids = torch.zeros(torch.Size([history_answer_embedding_vocab_size, input_shape[1]]),
+            history_answer_marker = torch.zeros(torch.Size([history_answer_embedding_vocab_size, input_shape[1]]),
                                                       dtype=torch.long, device=device
                                                        )
 
@@ -52,7 +53,12 @@ class BertEmbeddings(nn.Module):
             inputs_embeds = self.word_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
-        history_answer_embeddings = self.history_answer_embeddings(history_answer_ids)
+        history_answer_embeddings = self.history_answer_embeddings(history_answer_marker)
+        # torch.set_printoptions(profile="full")
+        # print("input_embeds:", inputs_embeds)
+        # print("position_embeddings:", position_embeddings)
+        # print("token_type_embeddings:", token_type_embeddings)
+        # print("history_answer_embeddings:", history_answer_embeddings)
 
         ###--------------------------------------------------------------------------------------##
         # # self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)

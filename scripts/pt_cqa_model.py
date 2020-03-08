@@ -23,42 +23,54 @@ from transformers import BertPreTrainedModel
 from transformers import BertConfig, BertTokenizer
 from bert_model import BertModel
 
-# def bert_rep(bert_config, input_ids):
-#     """
-#     :param bert_config: 'BertConfig' instance
-#     :param input_ids: torch.LongTensor of shape (batch_size, sequence_length),
-#         indices of input sequence tokens in the vocabulary, which can be obtained using transformers.BertTokenizer
-#     :return final_hidden: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size),
-#         sequence of hidden-states at the output of the last layer of the model
-#     :return sent_rep: torch.FloatTensor of shape (batch_size, hidden_size),
-#         last layer hidden-state of the first token of the sequence (classification token) further processed by
-#         a Linear layer and a Tanh activation function
-#     """
-#
-#     # model = transformers.BertModel(config=bert_config,)
-#     model = BertModel.from_pretrained('bert-large-cased')
-#     outputs = model(input_ids)
-#     final_hidden = model(input_ids)[0]
-#     sent_rep = model(input_ids)[1]
-#
-#     return final_hidden, sent_rep
+"""
+:param bert_config: 'BertConfig' instance
+:param input_ids: torch.LongTensor of shape (batch_size, sequence_length),
+    indices of input sequence tokens in the vocabulary, which can be obtained using transformers.BertTokenizer
+:return final_hidden: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size),
+    sequence of hidden-states at the output of the last layer of the model
+:return sent_rep: torch.FloatTensor of shape (batch_size, hidden_size),
+    last layer hidden-state of the first token of the sequence (classification token) further processed by
+    a Linear layer and a Tanh activation function
+"""
 
 
 def bert_rep(bert_config, is_training, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings):
+    """
+
+    :param bert_config: 'BertConfig' instance
+    :param is_training: bool; not sure if necessary?
+    :param input_ids: torch.LongTensor of shape (batch_size, sequence_length),
+    indices of input sequence tokens in the vocabulary, which can be obtained using transformers.BertTokenizer
+    :param input_mask: aka attention mask; The attention mask is an optional argument used when
+    batching sequences together. This argument indicates to the model which tokens should be attended to,
+    and which should not.
+    :param segment_ids: aka token type ids; indicates whether a token is part of a context or the question
+    :param history_answer_marker: see FeatureDescriptions.pdf
+    :param use_one_hot_embeddings:
+    :return sequence_output: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size),
+    sequence of hidden-states at the output of the last layer of the model
+    :return pooled_output: torch.FloatTensor of shape (batch_size, hidden_size),
+    last layer hidden-state of the first token of the sequence (classification token) further processed by
+    a Linear layer and a Tanh activation function
+    """
     model = BertModel.from_pretrained('bert-large-cased')
-    inputs = (
-        config=bert_config,
-        input_ids=input_ids,
-        input_mask=input_mask,
-        token_type_ids=segment_ids,
-        history_answer_marker=history_answer_marker,
-        )
+    inputs = {
+        # "config":bert_config,
+        "input_ids":input_ids,
+        "attention_mask":input_mask,
+        "token_type_ids":segment_ids,
+        "history_answer_marker":history_answer_marker,
+    }
 
     outputs = model(**inputs)
 
-    final_hidden = outputs[0]
-    sent_rep = outputs[1]
-    return final_hidden, sent_rep
+    sequence_output = outputs[0]  # final hidden layer, with dimensions [batch_size, max_seq_len, hidden_size]
+    pooled_output = outputs[1]  # entire sequence representation/embedding of 'CLS' token
+
+    # print("CLS:", final_hidden.shape)
+    # print("sent_rep:", sent_rep.shape)
+    return sequence_output, pooled_output
 
 
 def cqa_model(final_hidden):
@@ -128,6 +140,7 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
     :return new_mtl_input: 
     :return squeezed probs:
     """
+
 
     # 12 * 768 --> e.g. 20 * 768
     padding = torch.nn.ZeroPad2d((0, 0, 0, 12-slice_num)) #train_batch_size=12, padding at the bottom
@@ -239,13 +252,17 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
     bert_representation = torch.nn.functional.pad(bert_representation, (0, 0, 0, 0, 0, 12-slice_num)) ##train_batch_size=12, padding at the back
     splits = torch.split(bert_representation, slice_mask, 0) 
 
+
+    ## from kathryn: there seems to be some sort of dimensional mismatch here? Not sure what's going on...
     pad_fn = lambda x, num: torch.nn.functional.pad(x, (0, 0, 12-num, 0, 0, 0)) #train_batch_size=12, padding at the top
+
     padded = []
-    for i in range(3): #train_batch_size=12, but i used 3 for my mini-example
+    for i in range(args.batch_size): #train_batch_size=12, but i used 3 for my mini-example
         padded.append(pad_fn(splits[i], slice_mask[i]))
 
     # for index, tensor in enumerate(padded): #TEST
     #     padded[index] = tensor[:2, :15, :] #TEST
+
         
     # --> 12 * 11 * 384 * 768
     token_tensor = torch.stack(padded, axis=0)
