@@ -106,7 +106,7 @@ if __name__ == '__main__':
     # set the seed for initialization
     set_seed(args)
     # get the BERT config using huggingface
-    bert_config = BertConfig.from_pretrained('bert-large-cased')
+    bert_config = BertConfig.from_pretrained('bert-base-uncased')
 
     if args.max_seq_length > bert_config.max_position_embeddings:
         raise ValueError(
@@ -134,7 +134,7 @@ if __name__ == '__main__':
         os.makedirs(args.output_dir + '/summaries/val/')
         os.makedirs(args.output_dir + '/summaries/rl/')
 
-    tokenizer = BertTokenizer.from_pretrained('bert-large-cased')
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     if args.do_train:
         # read in training data, generate training features, and generate training batches
@@ -144,7 +144,7 @@ if __name__ == '__main__':
         train_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[
                                                                  -1] == '/' else args.quac_data_dir + '/val_v0.2.json'  # CHANGED TO VAL ONLY FOR TESTING
         if args.load_small_portion:
-            train_examples = read_quac_examples(input_file=train_file, is_training=True)[:10]
+            train_examples = read_quac_examples(input_file=train_file, is_training=True)[:3]
         else:
             train_examples = read_quac_examples(input_file=train_file, is_training=True)
 
@@ -205,8 +205,8 @@ if __name__ == '__main__':
             epoch_iterator = tqdm(train_batches, desc="Iteration", disable=args.local_rank not in [-1, 0])
             for step, batch in enumerate(epoch_iterator):
                 batch_features, batch_slice_mask, batch_slice_num, output_features = batch
-                input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(
-                    0)  # TEST
+#                input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(
+#                    0)  # TEST
 
                 fd = convert_features_to_feed_dict(batch_features)  # feed_dict
                 fd_output = convert_features_to_feed_dict(output_features)
@@ -243,25 +243,25 @@ if __name__ == '__main__':
                 # (start_logits, end_logits) = cqa_model(new_bert_representation)
 
 
-                print("Done with batch", step)
+#                print("Done with batch", step)
 
                 # a = torch.ten
 
 
 
-        def history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
-            """
-            :param bert_representation: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size),
-                sequence of hidden-states at the output of the last layer of the model
-            :param history_attention_input: torch.Tensor
-            :param mtl_input:
-            :param slice_mask: list of size=train_batch_size, containing integers corresponding to the size
-                of each subtensor we will get after splitting the history_attention_input tensor
-            :param slice_num: int
-            :return new_bert_representation:
-            :return new_mtl_input:
-            :return squeezed probs:
-            """
+#        def history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
+#            """
+#            :param bert_representation: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size),
+#                sequence of hidden-states at the output of the last layer of the model
+#            :param history_attention_input: torch.Tensor
+#            :param mtl_input:
+#            :param slice_mask: list of size=train_batch_size, containing integers corresponding to the size
+#                of each subtensor we will get after splitting the history_attention_input tensor
+#            :param slice_num: int
+#            :return new_bert_representation:
+#            :return new_mtl_input:
+#            :return squeezed probs:
+#            """
 
 
 
@@ -270,63 +270,63 @@ if __name__ == '__main__':
         # we cannot predict the exact training steps because of the "example-aware" batching,
         # so we run some initial experiments and found out the exact training steps
         # num_train_steps = 11438 * FLAGS.num_train_epochs
-        num_train_steps = args.train_steps
-        num_warmup_steps = int(num_train_steps * args.warmup_proportion)
+#        num_train_steps = args.train_steps
+#        num_warmup_steps = int(num_train_steps * args.warmup_proportion)
 
-    if args.do_predict:
+#    if args.do_predict:
         # read in validation data, generate val features
-        val_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[
-                                                               -1] == '/' else args.quac_data_dir + '/val_v0.2.json'
-        if args.load_small_portion:
-            val_examples = read_quac_examples(input_file=val_file, is_training=False)[
-                           :10]  # USE THE WHOLE DATASET LATER
-        else:
-            val_examples = read_quac_examples(input_file=val_file, is_training=False)
+#        val_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[
+#                                                               -1] == '/' else args.quac_data_dir + '/val_v0.2.json'
+#        if args.load_small_portion:
+#            val_examples = read_quac_examples(input_file=val_file, is_training=False)[
+#                           :10]  # USE THE WHOLE DATASET LATER
+#        else:
+#            val_examples = read_quac_examples(input_file=val_file, is_training=False)
 
         # we read in the val file in json for the external_call function in the validation step
-        val_file_json = json.load(open(val_file, 'r'))['data']
+#        val_file_json = json.load(open(val_file, 'r'))['data']
 
         # we attempt to read features from cache
-        features_fname = args.cache_dir + '/val_features_{}_{}.pkl'.format(args.load_small_portion,
-                                                                           args.max_considered_history_turns)
-        example_tracker_fname = args.cache_dir + '/val_example_tracker_{}_{}.pkl'.format(args.load_small_portion,
-                                                                                         args.max_considered_history_turns)
-        variation_tracker_fname = args.cache_dir + '/val_variation_tracker_{}_{}.pkl'.format(args.load_small_portion,
-                                                                                             args.max_considered_history_turns)
-        example_features_nums_fname = args.cache_dir + '/val_example_features_nums_{}_{}.pkl'.format(
-            args.load_small_portion, args.max_considered_history_turns)
+#        features_fname = args.cache_dir + '/val_features_{}_{}.pkl'.format(args.load_small_portion,
+#                                                                           args.max_considered_history_turns)
+#        example_tracker_fname = args.cache_dir + '/val_example_tracker_{}_{}.pkl'.format(args.load_small_portion,
+#                                                                                         args.max_considered_history_turns)
+#        variation_tracker_fname = args.cache_dir + '/val_variation_tracker_{}_{}.pkl'.format(args.load_small_portion,
+#                                                                                             args.max_considered_history_turns)
+#        example_features_nums_fname = args.cache_dir + '/val_example_features_nums_{}_{}.pkl'.format(
+#            args.load_small_portion, args.max_considered_history_turns)
 
-        try:
-            print('attempting to load val features from cache')
-            with open(features_fname, 'rb') as handle:
-                val_features = pickle.load(handle)
-            with open(example_tracker_fname, 'rb') as handle:
-                val_example_tracker = pickle.load(handle)
-            with open(variation_tracker_fname, 'rb') as handle:
-                val_variation_tracker = pickle.load(handle)
-            with open(example_features_nums_fname, 'rb') as handle:
-                val_example_features_nums = pickle.load(handle)
-        except:
-            print('val feature cache does not exist, generating')
-            val_features, val_example_tracker, val_variation_tracker, val_example_features_nums = \
-                convert_examples_to_variations_and_then_features(
-                    examples=val_examples, tokenizer=tokenizer,
-                    max_seq_length=args.max_seq_length, doc_stride=args.doc_stride,
-                    max_query_length=64,
-                    max_considered_history_turns=args.max_considered_history_turns,
-                    is_training=False)
+#        try:
+#            print('attempting to load val features from cache')
+#            with open(features_fname, 'rb') as handle:
+#                val_features = pickle.load(handle)
+#            with open(example_tracker_fname, 'rb') as handle:
+#                val_example_tracker = pickle.load(handle)
+#            with open(variation_tracker_fname, 'rb') as handle:
+#                val_variation_tracker = pickle.load(handle)
+#            with open(example_features_nums_fname, 'rb') as handle:
+#                val_example_features_nums = pickle.load(handle)
+#        except:
+#            print('val feature cache does not exist, generating')
+#            val_features, val_example_tracker, val_variation_tracker, val_example_features_nums = \
+#                convert_examples_to_variations_and_then_features(
+#                    examples=val_examples, tokenizer=tokenizer,
+#                    max_seq_length=args.max_seq_length, doc_stride=args.doc_stride,
+#                    max_query_length=64,
+#                    max_considered_history_turns=args.max_considered_history_turns,
+#                    is_training=False)
 
-            with open(features_fname, 'wb') as handle:
-                pickle.dump(val_features, handle)
-            with open(example_tracker_fname, 'wb') as handle:
-                pickle.dump(val_example_tracker, handle)
-            with open(variation_tracker_fname, 'wb') as handle:
-                pickle.dump(val_variation_tracker, handle)
-            with open(example_features_nums_fname, 'wb') as handle:
-                pickle.dump(val_example_features_nums, handle)
-            print('val features generated')
+#            with open(features_fname, 'wb') as handle:
+#                pickle.dump(val_features, handle)
+#            with open(example_tracker_fname, 'wb') as handle:
+#                pickle.dump(val_example_tracker, handle)
+#            with open(variation_tracker_fname, 'wb') as handle:
+#                pickle.dump(val_variation_tracker, handle)
+#            with open(example_features_nums_fname, 'wb') as handle:
+#                pickle.dump(val_example_features_nums, handle)
+#            print('val features generated')
 
-        num_val_examples = len(val_examples)
+#        num_val_examples = len(val_examples)
 
     # PYTORCH DOES NOT USE PLACEHOLDERS AS TENSORFLOW, WE HAVE TO FIND A WAY OF ADAPTING THIS BLOCK OF CODE FOR PYTORCH.
     # GOOD EXPLANATION: Tensorflow works on a static graph concept that means the user first has to define the computation
@@ -360,23 +360,23 @@ if __name__ == '__main__':
     #    aux_start_positions = tf.placeholder(tf.int32, shape=[None], name='aux_start_positions')
     #    aux_end_positions = tf.placeholder(tf.int32, shape=[None], name='aux_end_positions')
 
-    input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0)# TEST
-    print(input_ids)
-    print(type(input_ids))
-    bert_representation, cls_representation = bert_rep(bert_config, input_ids)
+#    input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0)# TEST
+#    print(input_ids)
+#    print(type(input_ids))
+#    bert_representation, cls_representation = bert_rep(bert_config, input_ids)
 
     # for batch in train_batches: #TEST
     #     batch_features, batch_slice_mask, batch_slice_num, output_features = batch #TEST
     #     break #TEST
     # history_attention_net(bert_representation, cls_representation, cls_representation, [4, 5, 2], 2) #TEST
 
-    reduce_mean_representation = torch.mean(bert_representation, 1)
+#    reduce_mean_representation = torch.mean(bert_representation, 1)
     #    reduce_max_representation = tf.reduce_max(bert_representation, axis=1)
 
     #    if FLAGS.history_attention_input == 'CLS':
     #        history_attention_input = cls_representation
-    if args.history_attention_input == 'reduce_mean':
-        history_attention_input = reduce_mean_representation
+#    if args.history_attention_input == 'reduce_mean':
+#        history_attention_input = reduce_mean_representation
     #    elif FLAGS.history_attention_input == 'reduce_max':
     #        history_attention_input = reduce_max_representation
     #    else:
@@ -384,8 +384,8 @@ if __name__ == '__main__':
 
     #    if FLAGS.mtl_input == 'CLS':
     #        mtl_input = cls_representation
-    if args.mtl_input == 'reduce_mean':
-        mtl_input = reduce_mean_representation
+#    if args.mtl_input == 'reduce_mean':
+#        mtl_input = reduce_mean_representation
     #    elif FLAGS.mtl_input == 'reduce_max':
     #        mtl_input = reduce_max_representation
     #    else:
@@ -398,7 +398,7 @@ if __name__ == '__main__':
     #     # if they are not shared
     #     (aux_start_logits, aux_end_logits) = aux_cqa_model(bert_representation)
 
-    (aux_start_logits, aux_end_logits) = cqa_model(bert_representation)
+#    (aux_start_logits, aux_end_logits) = cqa_model(bert_representation)
 
     #    if FLAGS.disable_attention:
     #        new_bert_representation, new_mtl_input, attention_weights = disable_history_attention_net(bert_representation,
@@ -414,8 +414,8 @@ if __name__ == '__main__':
     #                                                                                            slice_num)
 
     #        else:
-    slice_mask = [0] * args.batch_size
-    slice_num = 0
+#    slice_mask = [0] * args.batch_size
+#    slice_num = 0
     # new_bert_representation, new_mtl_input, attention_weights = history_attention_net(bert_representation,
     #                                                                                   history_attention_input,
     #                                                                                   mtl_input,

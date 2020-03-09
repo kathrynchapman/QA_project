@@ -14,7 +14,6 @@ import tensorflow as tf
 from argparse import ArgumentParser
 import transformers
 import torch
-import numpy #TEST
 
 
 from transformers import BertPreTrainedModel
@@ -54,13 +53,13 @@ def bert_rep(bert_config, is_training, input_ids, input_mask, segment_ids, histo
     last layer hidden-state of the first token of the sequence (classification token) further processed by
     a Linear layer and a Tanh activation function
     """
-    model = BertModel.from_pretrained('bert-large-cased')
+    model = BertModel(bert_config, )
     inputs = {
         # "config":bert_config,
-        "input_ids":input_ids,
-        "attention_mask":input_mask,
-        "token_type_ids":segment_ids,
-        "history_answer_marker":history_answer_marker,
+        "input_ids": input_ids,
+        "attention_mask": input_mask,
+        "token_type_ids": segment_ids,
+        "history_answer_marker": history_answer_marker,
     }
 
     outputs = model(**inputs)
@@ -89,9 +88,7 @@ def cqa_model(final_hidden):
     #In the original code, they use truncated normal distribution, but there's no function for this in pytorch
     #I found this workaround https://discuss.pytorch.org/t/implementing-truncated-normal-initializer/4778/16
     #But maybe it's not worth it to go through all that trouble, so I just used normal distribution for now
-    #In the cqa_flags.py file, they specify that the value for bert hidden units can be 768 or 1024 and set it to 768
-    #I had to set it to 1024 though, otherwise I was getting size mismatch when I tried to do matrix multiplication later
-    output_weights = torch.empty(2, 1024).normal_(std=0.02)
+    output_weights = torch.empty(2, 768).normal_(std=0.02)
 
     output_bias = torch.zeros(2)
 
