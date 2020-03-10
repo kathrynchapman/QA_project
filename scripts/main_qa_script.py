@@ -232,7 +232,6 @@ if __name__ == '__main__':
                 history_attention_input = reduce_mean_representation
                 mtl_input = reduce_mean_representation
                 (aux_start_logits, aux_end_logits) = cqa_model(bert_representation)
-                # the next line causes the code to crash - I think we need to figure out this step before proceeding
                 new_bert_representation, new_mtl_input, attention_weights = history_attention_net(args, bert_representation,
                                                                                                   history_attention_input,
                                                                                                   mtl_input,

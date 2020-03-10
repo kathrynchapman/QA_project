@@ -126,11 +126,11 @@ def yesno_model(sent_rep):
 
 def history_attention_net(args, bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
     """
-    :param bert_representation: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size), 
+    :param bert_representation: torch.Tensor of shape (batch_size, sequence_length, hidden_size), 
         sequence of hidden-states at the output of the last layer of the model
-    :param history_attention_input: torch.Tensor
-    :param mtl_input:
-    :param slice_mask: list of size=train_batch_size, containing integers corresponding to the size
+    :param history_attention_input: torch.Tensor of shape (batch_size, hidden_size)
+    :param mtl_input: torch.Tensor of shape (batch_size, hidden_size)
+    :param slice_mask: list of size = train_batch_size, containing integers corresponding to the size
         of each subtensor we will get after splitting the history_attention_input tensor
     :param slice_num: int
     :return new_bert_representation: 
@@ -138,36 +138,25 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
     :return squeezed probs:
     """
 
-
     # 12 * 768 --> e.g. 20 * 768
-    padding = torch.nn.ZeroPad2d((0, 0, 0, 12-slice_num)) #train_batch_size=12, padding at the bottom
+    padding = torch.nn.ZeroPad2d((0, 0, 0, args.batch_size-slice_num)) #padding at the bottom
     history_attention_input = padding(history_attention_input)
     
     # the splits contains 12 feature groups. e.g. the first might be 4 * 768 (the number 4 is just an example)
-    print(history_attention_input.shape)
     splits = torch.split(history_attention_input, slice_mask, 0)
-    print(len(splits))
-    print(splits[0].shape)
-    print(splits[1].shape)
-    # print(splits)
+
     # --> 11 * 768
     def pad_fn(x, num):
-        padding = torch.nn.ZeroPad2d((0, 0, 11-num, 0)) #max_history_turns=11, padding at the top
+        padding = torch.nn.ZeroPad2d((0, 0, args.max_considered_history_turns-num, 0)) #padding at the top
         return padding(x) 
         
     padded = []
-    for i in range(args.batch_size): #train_batch_size=12, but i used 3 for my mini-example
+    for i in range(args.batch_size):
         padded.append(pad_fn(splits[i], slice_mask[i]))
     
     # --> 12 * 11 * 768
     input_tensor = torch.stack(padded, axis=0)
-    #I think there is no need to include the following line of code when we use pytorch
-    #There's a complete explanation of how tf.tensor.set_shape() works here: 
-    #https://stackoverflow.com/questions/35451948/clarification-on-tf-tensor-set-shape
-    #input_tensor.set_shape([FLAGS.train_batch_size, FLAGS.max_history_turns, FLAGS.bert_hidden])
-#    if FLAGS.history_attention_hidden:
-    #Good explanation of dimensions: https://mc.ai/pytorch-layer-dimensions-what-sizes-should-they-be-and-why/
-    if True: #TEST, original is with flags
+    if not True: #TEST, original is with flags
         #Create network layers
         layer_linear1 = torch.nn.Linear(input_tensor.shape[2], 100)
         torch.nn.init.normal_(layer_linear1.weight, std=0.02) #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
@@ -178,7 +167,7 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
         logits = layer_linear1(input_tensor)
         logits = layer_relu(logits)
         logits = layer_linear2(logits)
-    if not True: #TEST, original is with flags
+    if True: #TEST, original is with flags
         # --> 12 * 11 * 1
         #Create network layers
         layer_linear = torch.nn.Linear(input_tensor.shape[2], 1)
@@ -191,7 +180,7 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
     # mask: 12 * 11
     def sequence_mask(lengths, maxlen):
         """
-        Returns a mask tensor representing the first N positions of each cell.
+        Returns a mask tensor representing the first n positions of each cell.
         Equivalent to tf.sequence_mask() with param dtype=tf.float32.
         """
         if maxlen is None:
@@ -211,13 +200,9 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
                                     dtype=torch.long, device=x.device)
         return x[tuple(indices)]
 
-    logits_mask = sequence_mask(torch.tensor(slice_mask), 11)
-
-
+    logits_mask = sequence_mask(torch.tensor(slice_mask), args.max_considered_history_turns)
     logits_mask = flip(logits_mask, 1)
-
     exp_logits_masked = torch.exp(logits) * logits_mask
-    # exp_logits_masked = torch.mul(torch.exp(logits) * logits_mask)
     
     # --> e.g. 4 * 11
     exp_logits_masked = exp_logits_masked[:slice_num, :]
@@ -229,11 +214,11 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
     # 4 * 11 * 1
     probs = torch.unsqueeze(probs, dim=-1)
 
-    padding = torch.nn.ZeroPad2d((0, 0, 0, 12-slice_num)) ##train_batch_size=12, padding at the bottom
+    padding = torch.nn.ZeroPad2d((0, 0, 0, args.batch_size-slice_num)) #padding at the bottom
     mtl_input = padding(mtl_input)
     splits = torch.split(mtl_input, slice_mask, 0) 
     padded = []
-    for i in range(args.batch_size): #train_batch_size=12, but i used 3 for my mini-example
+    for i in range(args.batch_size):
         padded.append(pad_fn(splits[i], slice_mask[i]))
     mtl_input = torch.stack(padded, axis=0)
     mtl_input = mtl_input[:slice_num, :, :]    
@@ -241,25 +226,14 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
     # 4 * 768
     new_mtl_input = torch.sum(mtl_input * probs, dim=1)
     
-    # after slicing, the shape information is lost, we rest it
-    #I THINK THIS LINE IS NOT NECESSARY IN OUR PYTORCH IMPLEMENTATION
-#    new_mtl_input.set_shape([None, FLAGS.bert_hidden])
-    
-    # 12 * 384 * 768 --> 20 * 384 * 768   
-    bert_representation = torch.nn.functional.pad(bert_representation, (0, 0, 0, 0, 0, 12-slice_num)) ##train_batch_size=12, padding at the back
+    # 12 * 384 * 768 --> 20 * 384 * 768 
+    bert_representation = torch.nn.functional.pad(bert_representation, (0, 0, 0, 0, 0, args.batch_size-slice_num)) #padding at the back
     splits = torch.split(bert_representation, slice_mask, 0) 
 
-
-    ## from kathryn: there seems to be some sort of dimensional mismatch here? Not sure what's going on...
-    pad_fn = lambda x, num: torch.nn.functional.pad(x, (0, 0, 12-num, 0, 0, 0)) #train_batch_size=12, padding at the top
-
+    pad_fn = lambda x, num: torch.nn.functional.pad(x, (0, 0, 0, 0, args.max_considered_history_turns-num, 0)) #padding at the front
     padded = []
-    for i in range(args.batch_size): #train_batch_size=12, but i used 3 for my mini-example
+    for i in range(args.batch_size):
         padded.append(pad_fn(splits[i], slice_mask[i]))
-
-    # for index, tensor in enumerate(padded): #TEST
-    #     padded[index] = tensor[:2, :15, :] #TEST
-
         
     # --> 12 * 11 * 384 * 768
     token_tensor = torch.stack(padded, axis=0)
@@ -268,12 +242,10 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
     
     # 4 * 11 * 1 * 1
     probs = torch.unsqueeze(probs, dim=-1)
+    probs = probs[:, :11, :, :]
     
     # 4 * 384 * 768
-    probs = probs[:, :2, :, :] #TEST
     new_bert_representation = torch.sum(token_tensor * probs, dim=1)
-#    Following line is not necessary in PyTorch:
-#    new_bert_representation.set_shape([None, FLAGS.max_seq_length, FLAGS.bert_hidden])
 
     squeezed_probs = torch.squeeze(probs)
     
