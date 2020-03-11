@@ -236,7 +236,7 @@ if __name__ == '__main__':
                                                                                                   history_attention_input,
                                                                                                   mtl_input,
                                                                                                   batch_slice_mask,
-                                                                                                  batch_slice_num)
+                                                                                                  batch_slice_num)                                                                                                 
                 # yesno_logits = yesno_model(new_mtl_input)
                 # followup_logits = followup_model(new_mtl_input)
                 # (start_logits, end_logits) = cqa_model(new_bert_representation)
@@ -245,22 +245,6 @@ if __name__ == '__main__':
 #                print("Done with batch", step)
 
                 # a = torch.ten
-
-
-
-#        def history_attention_net(bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
-#            """
-#            :param bert_representation: torch.FloatTensor of shape (batch_size, sequence_length, hidden_size),
-#                sequence of hidden-states at the output of the last layer of the model
-#            :param history_attention_input: torch.Tensor
-#            :param mtl_input:
-#            :param slice_mask: list of size=train_batch_size, containing integers corresponding to the size
-#                of each subtensor we will get after splitting the history_attention_input tensor
-#            :param slice_num: int
-#            :return new_bert_representation:
-#            :return new_mtl_input:
-#            :return squeezed probs:
-#            """
 
 
 
