@@ -137,7 +137,7 @@ if __name__ == '__main__':
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     if args.do_train:
-        # read in training data, generate training features, and generate training batches
+        # Read in the training data and generate examples, features and batches
         train_examples = None
         num_train_steps = None
         num_warmup_steps = None
