@@ -86,8 +86,9 @@ def cqa_model(final_hidden):
     logits = torch.matmul(final_hidden_matrix, torch.transpose(output_weights, 0, 1))
     logits = torch.add(logits, output_bias)
 
-    logits = logits.view(batch_size, seq_length, 2)
+    logits = logits.reshape(batch_size, seq_length, 2)
     logits = logits.permute(2, 0, 1)
+    # logits = logits.T
 
     unstacked_logits = torch.unbind(logits, dim=0)
 
@@ -100,6 +101,24 @@ def yesno_model(sent_rep):
     """
     :param sent_rep: torch.FloatTensor of shape (batch_size, hidden_size), 
         last layer hidden-state of the first token of the sequence (classification token) further processed by 
+        a Linear layer and a Tanh activation function
+    :return logits: torch.Tensor object
+    """
+
+    linear_layer = torch.nn.Linear(sent_rep.shape[1], 3)
+
+    #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
+    torch.nn.init.normal_(linear_layer.weight, std=0.02)
+
+    logits = linear_layer(sent_rep)
+
+    return logits
+
+
+def followup_model(sent_rep):
+    """
+    :param sent_rep: torch.FloatTensor of shape (batch_size, hidden_size),
+        last layer hidden-state of the first token of the sequence (classification token) further processed by
         a Linear layer and a Tanh activation function
     :return logits: torch.Tensor object
     """

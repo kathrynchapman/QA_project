@@ -20,6 +20,7 @@ import pickle
 import itertools
 from time import time
 import traceback
+import tensorflow as tf
 from tqdm import tqdm, trange
 
 import torch
@@ -51,6 +52,13 @@ def train(args, train_dataset, model=None, tokenizer=None):
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.batch_size)
     print(train_dataloader[0])
+
+
+def compute_loss(logits, positions):
+    one_hot_positions = torch.nn.functional.one_hot(positions, seq_length)
+    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+    loss = torch.mean(torch.sum(one_hot_positions * log_probs, dim=-1))
+    return loss
 
 
 if __name__ == '__main__':
@@ -236,15 +244,46 @@ if __name__ == '__main__':
                                                                                                   history_attention_input,
                                                                                                   mtl_input,
                                                                                                   batch_slice_mask,
-                                                                                                  batch_slice_num)                                                                                                 
-                # yesno_logits = yesno_model(new_mtl_input)
-                # followup_logits = followup_model(new_mtl_input)
-                # (start_logits, end_logits) = cqa_model(new_bert_representation)
+                                                                                                  batch_slice_num)
+                # print("NEW BERT REP SHAPE:",new_bert_representation.shape)  # [3, 384, 768]
+
+                yesno_logits = yesno_model(new_mtl_input)
+                followup_logits = followup_model(new_mtl_input)
+                (start_logits, end_logits) = cqa_model(new_bert_representation)
+
+                softmax = torch.nn.Softmax(dim=-1)
+                start_probs = softmax(start_logits)
+                start_prob = torch.max(start_probs, axis=-1)
+                end_probs = softmax(end_logits)
+                end_prob = torch.max(end_probs, axis=-1)
+
+                seq_length = fd['input_ids'].shape[1]
+
+                start_loss = compute_loss(start_logits, fd_output['start_positions'])
+                end_loss = compute_loss(end_logits, fd_output['end_positions'])
 
 
-#                print("Done with batch", step)
 
-                # a = torch.ten
+
+
+                ############################################################################################################
+                # start_probs = tf.nn.softmax(start_logits, axis=-1)
+                # start_prob = tf.reduce_max(start_probs, axis=-1)
+                # end_probs = tf.nn.softmax(end_logits, axis=-1)
+                # end_prob = tf.reduce_max(end_probs, axis=-1)
+                #
+                # start_loss = compute_loss(start_logits, start_positions)
+                # end_loss = compute_loss(end_logits, end_positions)
+                #
+                # yesno_loss = tf.reduce_mean(
+                #     tf.nn.sparse_softmax_cross_entropy_with_logits(logits=yesno_logits, labels=yesno_labels))
+                # followup_loss = tf.reduce_mean(
+                #     tf.nn.sparse_softmax_cross_entropy_with_logits(logits=followup_logits, labels=followup_labels))
+                ############################################################################################################
+
+                print("Done with batch", step)
+
+
 
 
 

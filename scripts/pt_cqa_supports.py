@@ -999,7 +999,7 @@ def convert_features_to_feed_dict(features):
         batch_input_mask = torch.cat((batch_input_mask,torch.LongTensor([feature.input_mask])), 0)
         batch_segment_ids = torch.cat((batch_segment_ids, torch.LongTensor([feature.segment_ids])), 0)
         batch_start_positions = torch.cat((batch_start_positions, torch.LongTensor([feature.start_position])), 0)
-        batch_start_positions = torch.cat((batch_start_positions, torch.LongTensor([feature.start_position])), 0)
+        # batch_start_positions = torch.cat((batch_start_positions, torch.LongTensor([feature.start_position])), 0)
         batch_end_positions = torch.cat((batch_end_positions,torch.LongTensor([feature.end_position])), )
         batch_history_answer_marker = torch.cat((batch_history_answer_marker, torch.LongTensor([feature.history_answer_marker])), 0)
         batch_yesno = torch.cat((batch_yesno, torch.LongTensor([yesno_dict[feature.metadata['yesno']]])), 0)
