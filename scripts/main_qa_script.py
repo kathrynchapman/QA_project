@@ -247,20 +247,20 @@ if __name__ == '__main__':
                                                                                                   batch_slice_num)
                 # print("NEW BERT REP SHAPE:",new_bert_representation.shape)  # [3, 384, 768]
 
-                yesno_logits = yesno_model(new_mtl_input)
-                followup_logits = followup_model(new_mtl_input)
-                (start_logits, end_logits) = cqa_model(new_bert_representation)
+#                yesno_logits = yesno_model(new_mtl_input)
+#                followup_logits = followup_model(new_mtl_input)
+#                (start_logits, end_logits) = cqa_model(new_bert_representation)
 
-                softmax = torch.nn.Softmax(dim=-1)
-                start_probs = softmax(start_logits)
-                start_prob = torch.max(start_probs, axis=-1)
-                end_probs = softmax(end_logits)
-                end_prob = torch.max(end_probs, axis=-1)
+#                softmax = torch.nn.Softmax(dim=-1)
+#                start_probs = softmax(start_logits)
+#                start_prob = torch.max(start_probs, axis=-1)
+#                end_probs = softmax(end_logits)
+#                end_prob = torch.max(end_probs, axis=-1)
 
-                seq_length = fd['input_ids'].shape[1]
+#                seq_length = fd['input_ids'].shape[1]
 
-                start_loss = compute_loss(start_logits, fd_output['start_positions'])
-                end_loss = compute_loss(end_logits, fd_output['end_positions'])
+#                start_loss = compute_loss(start_logits, fd_output['start_positions'])
+#                end_loss = compute_loss(end_logits, fd_output['end_positions'])
 
 
 
@@ -281,7 +281,7 @@ if __name__ == '__main__':
                 #     tf.nn.sparse_softmax_cross_entropy_with_logits(logits=followup_logits, labels=followup_labels))
                 ############################################################################################################
 
-                print("Done with batch", step)
+#                print("Done with batch", step)
 
 
 
