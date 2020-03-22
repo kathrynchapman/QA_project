@@ -13,6 +13,7 @@ import os
 # from bert import modeling
 # import optimization
 import six
+from time import sleep
 
 import numpy as np
 from copy import deepcopy
@@ -22,6 +23,7 @@ from time import time
 import traceback
 import tensorflow as tf
 from tqdm import tqdm, trange
+import logging
 
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
@@ -33,6 +35,13 @@ from pt_cqa_model import *
 from pt_cqa_gen_batches import cqa_gen_example_aware_batches_v2
 # from cqa_rl_supports import *
 from scorer import external_call  # quac official evaluation script
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    from tensorboardX import SummaryWriter
+
+
+
 
 
 def set_seed(args):
@@ -51,15 +60,9 @@ def train(args, train_dataset, model=None, tokenizer=None):
     # args.batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.batch_size)
-    print(train_dataloader[0])
+    # print(train_dataloader[0])
 
-
-def compute_loss(logits, positions):
-    one_hot_positions = torch.nn.functional.one_hot(positions, seq_length)
-    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-    loss = torch.mean(torch.sum(one_hot_positions * log_probs, dim=-1))
-    return loss
-
+logger = logging.getLogger(__name__)
 
 if __name__ == '__main__':
 
@@ -97,6 +100,14 @@ if __name__ == '__main__':
     parser.add_argument("--disable_attention", action="store_true", help="disable the history attention module")
     parser.add_argument("--batch_size", default=12, type=int, help="Batch size for training and predicting")
     parser.add_argument("--num_epochs", default=1, type=int, help="Number of training epochs")
+    parser.add_argument("--do_MTL", default=True, type=bool, help="Whether to do multi-task learning")
+    parser.add_argument("--MTL_lambda", default=0.1, type=float, help="total loss = (1 - 2 * lambda) * convqa_loss + "
+                                                                      "lambda * followup_loss + lambda * yesno_loss")
+    parser.add_argument("--MTL_mu", default=0.8, type=float, help="total loss = mu * convqa_loss + lambda * "
+                                                                  "followup_loss + lambda * yesno_loss")
+    parser.add_argument("--bert_hidden", default=768, type=int, help="bert hidden units, 768 or 1024")
+
+
     args = parser.parse_args()
     args.output_dir = args.output_dir + '/' if args.output_dir[-1] != '/' else args.output_dir
 
@@ -111,10 +122,31 @@ if __name__ == '__main__':
         args.n_gpu = 1
     args.device = device
 
+    # Setup logging
+    # logging.basicConfig(
+    #     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+    #     datefmt="%m/%d/%Y %H:%M:%S",
+    #     level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
+    # )
+    logger.warning(
+        "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s",
+        args.local_rank,
+        device,
+        args.n_gpu,
+        bool(args.local_rank != -1),
+    )
+
     # set the seed for initialization
     set_seed(args)
     # get the BERT config using huggingface
     bert_config = BertConfig.from_pretrained('bert-base-uncased')
+
+    if args.local_rank in [-1, 0]:
+        tb_writer = SummaryWriter()
+
+    if args.local_rank == 0:
+        # Make sure only the first process in distributed training will download model & vocab
+        torch.distributed.barrier()
 
     if args.max_seq_length > bert_config.max_position_embeddings:
         raise ValueError(
@@ -207,8 +239,25 @@ if __name__ == '__main__':
         train_iterator = trange(
             epochs_trained, int(args.num_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0],
         )
-
         set_seed(args)  # Added here for reproductibility
+
+        model = MTLModel(args)
+
+        # if args.n_gpu > 1:
+        #     model = torch.nn.DataParallel(model)
+
+        # Distributed training (should be after apex fp16 initialization)
+        if args.local_rank != -1:
+            model = torch.nn.parallel.DistributedDataParallel(
+                model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True
+            )
+
+        model.to(device)
+        # Declare your loss function; we have declared the optimizer for you
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=3e-5)
+        loss_fnct = MTLLoss(args)
+        loss_log = tqdm(total=0, position=2, bar_format='{desc}')
         for _ in train_iterator:
             epoch_iterator = tqdm(train_batches, desc="Iteration", disable=args.local_rank not in [-1, 0])
             for step, batch in enumerate(epoch_iterator):
@@ -216,8 +265,11 @@ if __name__ == '__main__':
 #                input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(
 #                    0)  # TEST
 
-                fd = convert_features_to_feed_dict(batch_features)  # feed_dict
-                fd_output = convert_features_to_feed_dict(output_features)
+                model.train()
+
+                fd = convert_features_to_feed_dict(args, batch_features)  # feed_dict
+
+                fd_output = convert_features_to_feed_dict(args, output_features)
 
                 ## the below is just for my reference to know what's in the feed dict - kathryn
 
@@ -228,8 +280,7 @@ if __name__ == '__main__':
                 #              'followup': batch_followup,
                 #              'metadata': batch_metadata}
 
-
-                bert_representation, cls_representation = bert_rep(bert_config, is_training=True,
+                bert_representation, cls_representation = bert_rep(args, bert_config, is_training=True,
                                                                    input_ids=fd['input_ids'],
                                                                    input_mask=fd['input_mask'],
                                                                    segment_ids=fd['segment_ids'],
@@ -239,49 +290,59 @@ if __name__ == '__main__':
                 reduce_mean_representation = torch.mean(bert_representation, 1)
                 history_attention_input = reduce_mean_representation
                 mtl_input = reduce_mean_representation
-                (aux_start_logits, aux_end_logits) = cqa_model(bert_representation)
+                # (aux_start_logits, aux_end_logits) = cqa_model(bert_representation)
+
+                # inputs = {"bert_representation": bert_representation,
+                #           "history_attention_input": history_attention_input,
+                #           "mtl_input": mtl_input,
+                #           "batch_slice_mask": batch_slice_mask,
+                #           "batch_slice_num": batch_slice_num}
+
+                # new_bert_representation, new_mtl_input, attention_weights = model(**inputs)
+
                 new_bert_representation, new_mtl_input, attention_weights = history_attention_net(args, bert_representation,
                                                                                                   history_attention_input,
                                                                                                   mtl_input,
                                                                                                   batch_slice_mask,
                                                                                                   batch_slice_num)
-                # print("NEW BERT REP SHAPE:",new_bert_representation.shape)  # [3, 384, 768]
 
-#                yesno_logits = yesno_model(new_mtl_input)
-#                followup_logits = followup_model(new_mtl_input)
-#                (start_logits, end_logits) = cqa_model(new_bert_representation)
+                inputs = {"final_hidden": new_bert_representation.to(device),
+                          "sentence_rep":new_mtl_input.to(device)}
 
-#                softmax = torch.nn.Softmax(dim=-1)
-#                start_probs = softmax(start_logits)
-#                start_prob = torch.max(start_probs, axis=-1)
-#                end_probs = softmax(end_logits)
-#                end_prob = torch.max(end_probs, axis=-1)
+                (start_logits, end_logits), yesno_logits, followup_logits = model(**inputs)
 
-#                seq_length = fd['input_ids'].shape[1]
+                total_loss = loss_fnct.compute_total_loss(fd, fd_output, start_logits, end_logits,
+                                                          yesno_logits, followup_logits)
 
-#                start_loss = compute_loss(start_logits, fd_output['start_positions'])
-#                end_loss = compute_loss(end_logits, fd_output['end_positions'])
+                # print("Total loss: ", total_loss)
+                if step % 100 == 0:
+                    logging_loss = total_loss
+                loss_log.set_description_str(f'Current loss: {logging_loss}')
+                epoch_iterator.update(1)
+                optimizer.zero_grad()
+                total_loss.backward()
+                optimizer.step()
+
 
 
 
 
 
                 ############################################################################################################
-                # start_probs = tf.nn.softmax(start_logits, axis=-1)
-                # start_prob = tf.reduce_max(start_probs, axis=-1)
-                # end_probs = tf.nn.softmax(end_logits, axis=-1)
-                # end_prob = tf.reduce_max(end_probs, axis=-1)
-                #
-                # start_loss = compute_loss(start_logits, start_positions)
-                # end_loss = compute_loss(end_logits, end_positions)
-                #
-                # yesno_loss = tf.reduce_mean(
-                #     tf.nn.sparse_softmax_cross_entropy_with_logits(logits=yesno_logits, labels=yesno_labels))
-                # followup_loss = tf.reduce_mean(
-                #     tf.nn.sparse_softmax_cross_entropy_with_logits(logits=followup_logits, labels=followup_labels))
+                # if FLAGS.MTL:
+                #     cqa_loss = (start_loss + end_loss) / 2.0
+                #     if FLAGS.MTL_lambda < 1:
+                #         total_loss = FLAGS.MTL_mu * cqa_loss + FLAGS.MTL_lambda * yesno_loss + FLAGS.MTL_lambda * followup_loss
+                #     else:
+                #         total_loss = cqa_loss + yesno_loss + followup_loss
+                #     tf.summary.scalar('cqa_loss', cqa_loss)
+                #     tf.summary.scalar('yesno_loss', yesno_loss)
+                #     tf.summary.scalar('followup_loss', followup_loss)
+                # else:
+                #     total_loss = (start_loss + end_loss) / 2.0
                 ############################################################################################################
 
-#                print("Done with batch", step)
+                # print("Done with batch", step)
 
 
 

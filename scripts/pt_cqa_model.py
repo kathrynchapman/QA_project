@@ -11,9 +11,11 @@ from argparse import ArgumentParser
 import torch
 from transformers import BertPreTrainedModel, BertConfig, BertTokenizer
 from bert_model import BertModel
+import torch.nn as nn
+from torch.autograd import Variable
 
 
-def bert_rep(bert_config, is_training, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings):
+def bert_rep(args, bert_config, is_training, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings):
     """
     :param bert_config: 'BertConfig' instance
     :param is_training: bool; not sure if necessary?
@@ -32,13 +34,13 @@ def bert_rep(bert_config, is_training, input_ids, input_mask, segment_ids, histo
     a Linear layer and a Tanh activation function
     """
 
-    model = BertModel(bert_config, )
+    model = BertModel(bert_config, args).to(args.device)
     inputs = {
         # "config":bert_config,
-        "input_ids": input_ids,
-        "attention_mask": input_mask,
-        "token_type_ids": segment_ids,
-        "history_answer_marker": history_answer_marker,
+        "input_ids": input_ids.to(args.device),
+        "attention_mask": input_mask.to(args.device),
+        "token_type_ids": segment_ids.to(args.device),
+        "history_answer_marker": history_answer_marker.to(args.device),
     }
 
     outputs = model(**inputs)
@@ -47,8 +49,105 @@ def bert_rep(bert_config, is_training, input_ids, input_mask, segment_ids, histo
     pooled_output = outputs[1]  # entire sequence representation/embedding of 'CLS' token
 
     # print("CLS:", final_hidden.shape)
-    # print("sent_rep:", sent_rep.shape)
+    # print(print("sent_rep:", sent_rep.shape)
     return sequence_output, pooled_output
+
+
+
+
+
+
+class CQAModel(nn.Module):
+    def __init__(self, args):
+        super(CQAModel, self).__init__()
+        self.args = args
+        self.output_weights = torch.empty(2, self.args.bert_hidden).normal_(std=0.02).to(args.device)
+        self.output_bias = torch.zeros(2).to(args.device)
+
+    def forward(self, final_hidden):
+        final_hidden_shape = final_hidden.shape
+        batch_size = final_hidden_shape[0]
+        seq_length = final_hidden_shape[1]
+        hidden_size = final_hidden_shape[2]
+
+        final_hidden_matrix = final_hidden.view(batch_size * seq_length, hidden_size)
+        logits = torch.matmul(final_hidden_matrix, torch.transpose(self.output_weights, 0, 1))
+        logits = torch.add(logits, self.output_bias)
+
+        logits = logits.reshape(batch_size, seq_length, 2)
+        logits = logits.permute(2, 0, 1)
+        # logits = logits.T
+
+        unstacked_logits = torch.unbind(logits, dim=0)
+
+        (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
+
+        return start_logits, end_logits
+
+
+class YesNoModel(nn.Module):
+    def __init__(self, args):
+        super(YesNoModel, self).__init__()
+        self.args = args
+        self.linear_layer = torch.nn.Linear(self.args.bert_hidden, 3)
+        torch.nn.init.normal_(self.linear_layer.weight, std=0.02)
+
+    def forward(self, sent_rep):
+        logits = self.linear_layer(sent_rep)
+
+        return logits
+
+class FollowUpModel(nn.Module):
+    def __init__(self, args):
+        super(FollowUpModel, self).__init__()
+        self.args = args
+        self.linear_layer = torch.nn.Linear(self.args.bert_hidden, 3)
+        torch.nn.init.normal_(self.linear_layer.weight, std=0.02)
+
+    def forward(self, sent_rep):
+        logits = self.linear_layer(sent_rep)
+
+        return logits
+
+
+
+
+#------------------------------------------------------------------------------------------------------------
+# class MultiTaskLossWrapper(nn.Module):
+#     def __init__(self, task_num, model):
+#         super(MultiTaskLossWrapper, self).__init__()
+#         self.model = model
+#         self.task_num = task_num
+#         self.log_vars = nn.Parameter(torch.zeros((task_num)))
+#
+#     def forward(self, input, targets):
+#
+#         outputs = self.model(input)
+#
+#         precision1 = torch.exp(-self.log_vars[0])
+#         loss = torch.sum(precision1 * (targets[0] - outputs[0]) ** 2. + self.log_vars[0], -1)
+#
+#         precision2 = torch.exp(-self.log_vars[1])
+#         loss += torch.sum(precision2 * (targets[1] - outputs[1]) ** 2. + self.log_vars[1], -1)
+#
+#         loss = torch.mean(loss)
+#
+#         return loss, self.log_vars.data.tolist()
+#
+#
+class MTLModel(torch.nn.Module):
+    def __init__(self, args):
+        super(MTLModel, self).__init__()
+        self.args = args
+
+        self.cqa = CQAModel(self.args)
+        self.yesno = YesNoModel(self.args)
+        self.followup = FollowUpModel(self.args)
+
+    def forward(self, final_hidden, sentence_rep):
+        return (self.cqa(final_hidden), self.yesno(sentence_rep), self.followup(sentence_rep),)
+#------------------------------------------------------------------------------------------------------------
+
 
 
 def cqa_model(final_hidden):
@@ -173,10 +272,10 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
     # pass input_tensor to a single-layer feed-forward neural network, after which the input_tensor will be of size (8, 11, 1)
 
     # create network layers
-    layer_linear = torch.nn.Linear(input_tensor.shape[2], 1)
+    layer_linear = torch.nn.Linear(input_tensor.shape[2], 1).to(args.device)
     torch.nn.init.normal_(layer_linear.weight, std=0.02) # initialize the weights to a normal distribution (the original TensorFlow code uses a truncated normal distribution)        
     # do the forward pass
-    logits =  layer_linear(input_tensor)
+    logits = layer_linear(input_tensor)
 
     # squeeze input_tensor along dimension 2, so that it has size (8, 11)
     logits = torch.squeeze(logits, dim=2)
@@ -207,7 +306,7 @@ def history_attention_net(args, bert_representation, history_attention_input, mt
 
     logits_mask = sequence_mask(torch.tensor(slice_mask), args.max_considered_history_turns)
     logits_mask = flip(logits_mask, 1)
-    exp_logits_masked = torch.exp(logits) * logits_mask
+    exp_logits_masked = torch.exp(logits) * logits_mask.to(args.device)
 
     # use the softmax function to generate a tensor of probabilities  
     # slice the resulting exp_logits_masked tensor to get rid of the padded rows, obtaining a tensor of size (3, 11)
@@ -524,3 +623,51 @@ def fine_grained_history_attention_net(args, bert_representation, mtl_input, sli
     squeezed_probs = torch.squeeze(probs)
     
     return new_bert_representation, new_mtl_input, squeezed_probs
+
+class MTLLoss():
+    def __init__(self, args):
+        self.args = args
+
+    def compute_total_loss(self, fd, fd_output, start_logits, end_logits, yesno_logits, followup_logits):
+        softmax = torch.nn.Softmax(dim=-1)
+        start_probs = softmax(start_logits)
+        start_prob = torch.max(start_probs, axis=-1)
+        end_probs = softmax(end_logits)
+        end_prob = torch.max(end_probs, axis=-1)
+
+
+
+        # get the losses - the start loss is for identifying the correct start of the answer span,
+        # end loss is identifying the correct end of the answer span
+
+        start_loss = self.compute_cqa_loss(start_logits, fd_output['start_positions'], self.args.max_seq_length)
+        end_loss = self.compute_cqa_loss(end_logits, fd_output['end_positions'], self.args.max_seq_length)
+
+        yesno_labels = fd_output['yesno']
+        followup_labels = fd_output['followup']
+
+        yesno_loss = torch.mean(self.compute_sparse_softmax_cross_entropy(yesno_logits, yesno_labels))
+        followup_loss = torch.mean(self.compute_sparse_softmax_cross_entropy(followup_logits, followup_labels))
+
+        if self.args.do_MTL:
+            cqa_loss = (start_loss + end_loss) / 2.0
+            if self.args.MTL_lambda < 1:
+                total_loss = self.args.MTL_mu * cqa_loss + self.args.MTL_lambda * yesno_loss + \
+                             self.args.MTL_lambda * followup_loss
+            else:
+                total_loss = cqa_loss + yesno_loss + followup_loss
+        else:
+            total_loss = (start_loss + end_loss) / 2.0
+        return total_loss
+
+    def compute_cqa_loss(self, logits, positions, seq_length):
+        one_hot_positions = torch.nn.functional.one_hot(positions, seq_length)
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+        loss = -torch.mean(torch.sum(one_hot_positions * log_probs, dim=-1))
+        return loss
+
+    def compute_sparse_softmax_cross_entropy(self, logits, labels):
+        logp = torch.nn.functional.log_softmax(logits, dim=-1)
+        logpy = torch.gather(logp, 1, Variable(labels.view(-1, 1)))
+        loss = -(logpy).mean()
+        return loss

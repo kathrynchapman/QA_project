@@ -898,6 +898,8 @@ def convert_examples_to_variations_and_then_features(examples, tokenizer, max_se
         examples_shuffled = np.asarray(examples)
     
     for example_index, example in enumerate(examples_shuffled):
+        if example_index % 1000 == 0:
+            print("Generating example #" + str(example_index))
         example_features_num = []
 
         variations = convert_examples_to_example_variations([example], max_considered_history_turns)
@@ -951,38 +953,9 @@ def convert_examples_to_example_variations(examples, max_considered_history_turn
                 new_examples.append(each_new_example)
              
     return new_examples    
-    
-# def convert_features_to_feed_dict(features):
-#     batch_unique_ids, batch_input_ids, batch_input_mask = [], [], []
-#     batch_segment_ids, batch_start_positions, batch_end_positions, batch_history_answer_marker = [], [], [], []
-#     batch_yesno, batch_followup = [], []
-#     batch_metadata = []
-#
-#     yesno_dict = {'y': 0, 'n': 1, 'x': 2}
-#     followup_dict = {'y': 0, 'n': 1, 'm': 2}
-#
-#     for feature in features:
-#         batch_unique_ids.append(feature.unique_id)
-#         batch_input_ids.append(feature.input_ids)
-#         batch_input_mask.append(feature.input_mask)
-#         batch_segment_ids.append(feature.segment_ids)
-#         batch_start_positions.append(feature.start_position)
-#         batch_start_positions.append(feature.start_position)
-#         batch_end_positions.append(feature.end_position)
-#         batch_history_answer_marker.append(feature.history_answer_marker)
-#         batch_yesno.append(yesno_dict[feature.metadata['yesno']])
-#         batch_followup.append(followup_dict[feature.metadata['followup']])
-#         batch_metadata.append(feature.metadata)
-#
-#     feed_dict = {'unique_ids': batch_unique_ids, 'input_ids': batch_input_ids,
-#               'input_mask': batch_input_mask, 'segment_ids': batch_segment_ids,
-#               'start_positions': batch_start_positions, 'end_positions': batch_end_positions,
-#               'history_answer_marker': batch_history_answer_marker, 'yesno': batch_yesno, 'followup': batch_followup,
-#               'metadata': batch_metadata}
-#     return feed_dict
 
 
-def convert_features_to_feed_dict(features):
+def convert_features_to_feed_dict(args, features):
     batch_unique_ids, batch_input_ids, batch_input_mask = [], torch.LongTensor([]), torch.LongTensor([])
     batch_segment_ids, batch_start_positions, batch_end_positions, batch_history_answer_marker = \
         torch.LongTensor([]), torch.LongTensor([]), torch.LongTensor([]), torch.LongTensor([])
@@ -1007,10 +980,11 @@ def convert_features_to_feed_dict(features):
         batch_metadata.append(feature.metadata)
         # batch_metadata = torch.cat((batch_metadata, torch.Tensor(feature.metadata)), 0)
 
-    feed_dict = {'unique_ids': batch_unique_ids, 'input_ids': batch_input_ids,
-                 'input_mask': batch_input_mask, 'segment_ids': batch_segment_ids,
-                 'start_positions': batch_start_positions, 'end_positions': batch_end_positions,
-                 'history_answer_marker': batch_history_answer_marker, 'yesno': batch_yesno, 'followup': batch_followup,
+    feed_dict = {'unique_ids': batch_unique_ids, 'input_ids': batch_input_ids.to(args.device),
+                 'input_mask': batch_input_mask.to(args.device), 'segment_ids': batch_segment_ids.to(args.device),
+                 'start_positions': batch_start_positions.to(args.device), 'end_positions': batch_end_positions.to(args.device),
+                 'history_answer_marker': batch_history_answer_marker.to(args.device),
+                 'yesno': batch_yesno.to(args.device), 'followup': batch_followup.to(args.device),
                  'metadata': batch_metadata}
     return feed_dict
 

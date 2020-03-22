@@ -16,12 +16,13 @@ class BertEmbeddings(nn.Module):
     """Construct the embeddings from word, position and token_type embeddings.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, args):
         super().__init__()
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
         self.history_answer_embeddings = nn.Embedding(12, config.hidden_size)
+        self.args = args
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
@@ -35,7 +36,6 @@ class BertEmbeddings(nn.Module):
             input_shape = input_ids.size()
         else:
             input_shape = inputs_embeds.size()[:-1]
-        print(input_shape)
 
         seq_length = input_shape[1]
         device = input_ids.device if input_ids is not None else inputs_embeds.device
@@ -50,7 +50,7 @@ class BertEmbeddings(nn.Module):
                                                        )
 
         if inputs_embeds is None:
-            inputs_embeds = self.word_embeddings(input_ids)
+            inputs_embeds = self.word_embeddings(input_ids).to(self.args.device)
         position_embeddings = self.position_embeddings(position_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
         history_answer_embeddings = self.history_answer_embeddings(history_answer_marker)
@@ -121,11 +121,11 @@ class BertModel(BertPreTrainedModel):
         https://arxiv.org/abs/1706.03762
     """
 
-    def __init__(self, config):
+    def __init__(self, config, args):
         super().__init__(config)
         self.config = config
-
-        self.embeddings = BertEmbeddings(config)
+        self.args = args
+        self.embeddings = BertEmbeddings(config, self.args)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
 
