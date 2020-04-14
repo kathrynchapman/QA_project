@@ -2,16 +2,6 @@ import torch
 from torch import nn
 from transformers.modeling_bert import *
 
-
-def truncated_normal_(tensor, mean=0, std=1):
-    size = tensor.shape
-    tmp = tensor.new_empty(size + (4,)).normal_()
-    valid = (tmp < 2) & (tmp > -2)
-    ind = valid.max(-1, keepdim=True)[1]
-    tensor.data.copy_(tmp.gather(-1, ind).squeeze(-1))
-    tensor.data.mul_(std).add_(mean)
-    return tensor
-
 class BertEmbeddings(nn.Module):
     """Construct the embeddings from word, position and token_type embeddings.
     """
@@ -39,6 +29,7 @@ class BertEmbeddings(nn.Module):
 
         seq_length = input_shape[1]
         device = input_ids.device if input_ids is not None else inputs_embeds.device
+
         if position_ids is None:
             position_ids = torch.arange(seq_length, dtype=torch.long, device=device)
             position_ids = position_ids.unsqueeze(0).expand(input_shape)
@@ -50,10 +41,10 @@ class BertEmbeddings(nn.Module):
                                                        )
 
         if inputs_embeds is None:
-            inputs_embeds = self.word_embeddings(input_ids).to(self.args.device)
+            inputs_embeds = self.word_embeddings(input_ids.to(device))
         position_embeddings = self.position_embeddings(position_ids)
-        token_type_embeddings = self.token_type_embeddings(token_type_ids)
-        history_answer_embeddings = self.history_answer_embeddings(history_answer_marker)
+        token_type_embeddings = self.token_type_embeddings(token_type_ids.to(device))
+        history_answer_embeddings = self.history_answer_embeddings(history_answer_marker.to(device))
         # torch.set_printoptions(profile="full")
         # print("input_embeds:", inputs_embeds)
         # print("position_embeddings:", position_embeddings)

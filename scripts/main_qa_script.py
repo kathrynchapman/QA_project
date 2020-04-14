@@ -28,7 +28,7 @@ import logging
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
-from transformers import modeling_bert, BertConfig, BertTokenizer
+from transformers import modeling_bert, BertConfig, BertTokenizer, get_linear_schedule_with_warmup
 from pt_cqa_supports import *
 # from cqa_flags import FLAGS
 from pt_cqa_model import *
@@ -86,11 +86,12 @@ if __name__ == '__main__':
     parser.add_argument("--load_small_portion", action="store_true", help="Load a small portion of data during dev.")
     parser.add_argument("--max_seq_length", default=384, type=int, help="The maximum total input sequence "
                                                                         "length after tokenization.")
+    parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps.")
     parser.add_argument("--doc_stride", default=128, type=int, help="When splitting up a long document into chunks,"
                                                                     "how much stride to take between chunks.")
     parser.add_argument("--max_considered_history_turns", default=11, type=int, help="we only consider k history turns "
                                                                                      "that immediately proceed the current turn, when generating preprocessed features,")
-    parser.add_argument("--warmup_proportion", default=0.0, help="Proportion of training to perform linear "
+    parser.add_argument("--warmup_proportion", default=0.01, help="Proportion of training to perform linear "
                                                                  "learning rate warmup for. E.g., 0.1 = 10% of training.")
     parser.add_argument("--history_attention_input", default='reduce_mean', type=str,
                         help="CLS, reduce_mean, reduce_max")
@@ -98,7 +99,7 @@ if __name__ == '__main__':
     parser.add_argument("--aux_shared", default=False, type=bool,
                         help="wheter to share the aux prediction layer with the main convqa model")
     parser.add_argument("--disable_attention", action="store_true", help="disable the history attention module")
-    parser.add_argument("--batch_size", default=12, type=int, help="Batch size for training and predicting")
+    parser.add_argument("--batch_size", default=24, type=int, help="Batch size for training and predicting")
     parser.add_argument("--num_epochs", default=1, type=int, help="Number of training epochs")
     parser.add_argument("--do_MTL", default=True, type=bool, help="Whether to do multi-task learning")
     parser.add_argument("--MTL_lambda", default=0.1, type=float, help="total loss = (1 - 2 * lambda) * convqa_loss + "
@@ -106,10 +107,11 @@ if __name__ == '__main__':
     parser.add_argument("--MTL_mu", default=0.8, type=float, help="total loss = mu * convqa_loss + lambda * "
                                                                   "followup_loss + lambda * yesno_loss")
     parser.add_argument("--bert_hidden", default=768, type=int, help="bert hidden units, 768 or 1024")
-
+    parser.add_argument("--num_train_steps", default=30000, type=int, help= "loss: the loss gap on reward set, f1: the f1 on reward set")
 
     args = parser.parse_args()
     args.output_dir = args.output_dir + '/' if args.output_dir[-1] != '/' else args.output_dir
+    args.num_warmup_steps = int(args.num_train_steps * args.warmup_proportion)
 
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
@@ -129,11 +131,9 @@ if __name__ == '__main__':
     #     level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
     # )
     logger.warning(
-        "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s",
-        args.local_rank,
+        "Device: %s, n_gpu: %s",
         device,
         args.n_gpu,
-        bool(args.local_rank != -1),
     )
 
     # set the seed for initialization
@@ -183,8 +183,10 @@ if __name__ == '__main__':
         num_warmup_steps = None
         train_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[
                                                                  -1] == '/' else args.quac_data_dir + '/val_v0.2.json'  # CHANGED TO VAL ONLY FOR TESTING
+        train_file = args.quac_data_dir + 'train_v0.2.json' if args.quac_data_dir[
+                                                                 -1] == '/' else args.quac_data_dir + '/train_v0.2.json'
         if args.load_small_portion:
-            train_examples = read_quac_examples(input_file=train_file, is_training=True)[:3]
+            train_examples = read_quac_examples(input_file=train_file, is_training=True)[:30]
         else:
             train_examples = read_quac_examples(input_file=train_file, is_training=True)
 
@@ -230,11 +232,16 @@ if __name__ == '__main__':
         temp_train_batches = cqa_gen_example_aware_batches_v2(train_features, example_tracker, variation_tracker,
                                                               example_features_nums,
                                                               batch_size=args.batch_size, num_epoches=1, shuffle=True)
-        print('len temp_train_batches', len(list(temp_train_batches)))
+        num_batches = len(list(temp_train_batches))
+        print('len temp_train_batches', num_batches)
 
         global_step = 0
         epochs_trained = 0
         steps_trained_in_current_epoch = 0
+
+        if args.num_train_steps > 0:
+            t_total = args.num_train_steps
+            args.num_epochs = args.num_train_steps // num_batches + 1
 
         train_iterator = trange(
             epochs_trained, int(args.num_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0],
@@ -245,6 +252,8 @@ if __name__ == '__main__':
 
         # if args.n_gpu > 1:
         #     model = torch.nn.DataParallel(model)
+            # torch.distributed.init_process_group(backend="nccl")
+            # model = torch.nn.parallel.DistributedDataParallel(model)
 
         # Distributed training (should be after apex fp16 initialization)
         if args.local_rank != -1:
@@ -252,16 +261,28 @@ if __name__ == '__main__':
                 model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True
             )
 
-        model.to(device)
+        # model.to(device)
+        model.zero_grad()
+        # print("MODEL PARAMETERS:", list(model.parameters()))
+        # for name, param in model.named_parameters():
+        #     if param.requires_grad:
+        #         print(name, param.data)
+
         # Declare your loss function; we have declared the optimizer for you
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=3e-5)
+        optimizer = torch.optim.Adam(model.parameters(), lr=3e-5, eps=1e-6)
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer, num_warmup_steps=args.num_warmup_steps, num_training_steps=args.num_train_steps
+        )
         loss_fnct = MTLLoss(args)
-        loss_log = tqdm(total=0, position=2, bar_format='{desc}')
+        loss_log = tqdm(total=0, position=3, bar_format='{desc}')
+        lr_log = tqdm(total=0, position=4, bar_format='{desc}')
+        losses = []
         for _ in train_iterator:
-            epoch_iterator = tqdm(train_batches, desc="Iteration", disable=args.local_rank not in [-1, 0])
+            epoch_iterator = tqdm(train_batches, desc="Iteration", disable=args.local_rank not in [-1, 0], total=num_batches)
             for step, batch in enumerate(epoch_iterator):
                 batch_features, batch_slice_mask, batch_slice_num, output_features = batch
+
 #                input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(
 #                    0)  # TEST
 
@@ -300,28 +321,78 @@ if __name__ == '__main__':
 
                 # new_bert_representation, new_mtl_input, attention_weights = model(**inputs)
 
-                new_bert_representation, new_mtl_input, attention_weights = history_attention_net(args, bert_representation,
+                # hist_attn_model = HistoryAttentionNet(args).to(device)
+
+                # new_bert_representation, new_mtl_input, attention_weights = hist_attn_model(bert_representation,
+                #                                                                                   history_attention_input,
+                #                                                                                   mtl_input,
+                #                                                                                   batch_slice_mask,
+                #                                                                                   batch_slice_num)
+
+                # new_bert_representation, new_mtl_input, attention_weights = history_attention_net(args, bert_representation,
+                #                                                                                   history_attention_input,
+                #                                                                                   mtl_input,
+                #                                                                                   batch_slice_mask,
+                #                                                                                   batch_slice_num)
+
+                # inputs = {"final_hidden": new_bert_representation.to(device),
+                #           "sentence_rep":new_mtl_input.to(device)}
+
+                # (start_logits, end_logits), yesno_logits, followup_logits = model(**inputs)
+                (start_logits, end_logits), yesno_logits, followup_logits = model(bert_representation,
                                                                                                   history_attention_input,
                                                                                                   mtl_input,
                                                                                                   batch_slice_mask,
                                                                                                   batch_slice_num)
 
-                inputs = {"final_hidden": new_bert_representation.to(device),
-                          "sentence_rep":new_mtl_input.to(device)}
-
-                (start_logits, end_logits), yesno_logits, followup_logits = model(**inputs)
-
                 total_loss = loss_fnct.compute_total_loss(fd, fd_output, start_logits, end_logits,
                                                           yesno_logits, followup_logits)
 
-                # print("Total loss: ", total_loss)
+                if step % 10 == 0:
+                    logging_loss = total_loss.item()
+                    learning_rate_scalar = scheduler.get_last_lr()[0]
                 if step % 100 == 0:
-                    logging_loss = total_loss
+                    losses.append(logging_loss)
                 loss_log.set_description_str(f'Current loss: {logging_loss}')
+                lr_log.set_description_str(f'Current learning rate: {learning_rate_scalar}')
                 epoch_iterator.update(1)
                 optimizer.zero_grad()
                 total_loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+
                 optimizer.step()
+
+                scheduler.step()  # Update learning rate schedule
+                model.zero_grad()
+                global_step += 1
+
+                # to reference for saving model
+                if args.save_steps > 0 and global_step % args.save_steps == 0:
+                    # Save model checkpoint
+                    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+
+                    torch.save(model, output_dir + '/practice.pt')
+                    # https://pytorch.org/tutorials/beginner/saving_loading_models.html
+
+
+                    #
+                    # model_to_save.save_pretrained(output_dir)
+                    # tokenizer.save_pretrained(output_dir)
+                    #
+                    # torch.save(args, os.path.join(output_dir, "training_args.bin"))
+                    # logger.info("Saving model checkpoint to %s", output_dir)
+                    #
+                    # torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+                    # torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+                    # logger.info("Saving optimizer and scheduler states to %s", output_dir)
+
+        print("Final loss:", logging_loss)
+        print("All losses:", losses)
+
+
 
 
 
