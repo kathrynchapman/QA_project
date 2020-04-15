@@ -21,7 +21,7 @@ import pickle
 import itertools
 from time import time
 import traceback
-import tensorflow as tf
+
 from tqdm import tqdm, trange
 import logging
 
@@ -41,26 +41,12 @@ except ImportError:
     from tensorboardX import SummaryWriter
 
 
-
-
-
 def set_seed(args):
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
-
-
-def train(args, train_dataset, model=None, tokenizer=None):
-    """ Train the model """
-    if args.local_rank in [-1, 0]:
-        tb_writer = SummaryWriter()
-
-    # args.batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.batch_size)
-    # print(train_dataloader[0])
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +65,7 @@ if __name__ == '__main__':
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument('--do_predict', action="store_true", help='Whether to predict or not.')
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
-    parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--no_cuda", action="store_true", help="Avoid using CUDA when available")
-    parser.add_argument("--train_steps", type=int, default=20,
-                        help="loss: the loss gap on reward set, f1: the f1 on reward set")
     parser.add_argument("--load_small_portion", action="store_true", help="Load a small portion of data during dev.")
     parser.add_argument("--max_seq_length", default=384, type=int, help="The maximum total input sequence "
                                                                         "length after tokenization.")
@@ -91,7 +74,7 @@ if __name__ == '__main__':
                                                                     "how much stride to take between chunks.")
     parser.add_argument("--max_considered_history_turns", default=11, type=int, help="we only consider k history turns "
                                                                                      "that immediately proceed the current turn, when generating preprocessed features,")
-    parser.add_argument("--warmup_proportion", default=0.01, help="Proportion of training to perform linear "
+    parser.add_argument("--warmup_proportion", default=0.1, help="Proportion of training to perform linear "
                                                                  "learning rate warmup for. E.g., 0.1 = 10% of training.")
     parser.add_argument("--history_attention_input", default='reduce_mean', type=str,
                         help="CLS, reduce_mean, reduce_max")
@@ -100,7 +83,7 @@ if __name__ == '__main__':
                         help="wheter to share the aux prediction layer with the main convqa model")
     parser.add_argument("--disable_attention", action="store_true", help="disable the history attention module")
     parser.add_argument("--batch_size", default=24, type=int, help="Batch size for training and predicting")
-    parser.add_argument("--num_epochs", default=1, type=int, help="Number of training epochs")
+    parser.add_argument("--num_epochs", default=0, type=int, help="Number of training epochs")
     parser.add_argument("--do_MTL", default=True, type=bool, help="Whether to do multi-task learning")
     parser.add_argument("--MTL_lambda", default=0.1, type=float, help="total loss = (1 - 2 * lambda) * convqa_loss + "
                                                                       "lambda * followup_loss + lambda * yesno_loss")
@@ -108,28 +91,17 @@ if __name__ == '__main__':
                                                                   "followup_loss + lambda * yesno_loss")
     parser.add_argument("--bert_hidden", default=768, type=int, help="bert hidden units, 768 or 1024")
     parser.add_argument("--num_train_steps", default=30000, type=int, help= "loss: the loss gap on reward set, f1: the f1 on reward set")
-
+    parser.add_argument("--bert_version", default='bert-base-uncased', type=str, help="Which BERT model to use: bert-case-cased, bert-base-uncased, bert-large-cased, bert-large-uncased")
     args = parser.parse_args()
     args.output_dir = args.output_dir + '/' if args.output_dir[-1] != '/' else args.output_dir
     args.num_warmup_steps = int(args.num_train_steps * args.warmup_proportion)
+    args.n_gpu = torch.cuda.device_count()
 
-    # Setup CUDA, GPU & distributed training
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        args.n_gpu = torch.cuda.device_count()
-    else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
-        torch.distributed.init_process_group(backend="nccl")
-        args.n_gpu = 1
+    if 'large' in args.bert_version:
+        args.bert_hidden = 1024
+
+    device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.device = device
-
-    # Setup logging
-    # logging.basicConfig(
-    #     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-    #     datefmt="%m/%d/%Y %H:%M:%S",
-    #     level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
-    # )
     logger.warning(
         "Device: %s, n_gpu: %s",
         device,
@@ -138,15 +110,12 @@ if __name__ == '__main__':
 
     # set the seed for initialization
     set_seed(args)
+
     # get the BERT config using huggingface
-    bert_config = BertConfig.from_pretrained('bert-base-uncased')
+    bert_config = BertConfig.from_pretrained(args.bert_version)
 
-    if args.local_rank in [-1, 0]:
-        tb_writer = SummaryWriter()
+    tb_writer = SummaryWriter()
 
-    if args.local_rank == 0:
-        # Make sure only the first process in distributed training will download model & vocab
-        torch.distributed.barrier()
 
     if args.max_seq_length > bert_config.max_position_embeddings:
         raise ValueError(
@@ -168,7 +137,7 @@ if __name__ == '__main__':
                 args.output_dir
             )
         )
-    if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
+    if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
         os.makedirs(args.output_dir + '/summaries/train/')
         os.makedirs(args.output_dir + '/summaries/val/')
@@ -176,17 +145,19 @@ if __name__ == '__main__':
 
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
+    dev_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[
+                                                           -1] == '/' else args.quac_data_dir + '/val_v0.2.json'  # CHANGED TO VAL ONLY FOR TESTING
+    train_file = args.quac_data_dir + 'train_v0.2.json' if args.quac_data_dir[
+                                                               -1] == '/' else args.quac_data_dir + '/train_v0.2.json'
+
     if args.do_train:
         # Read in the training data and generate examples, features and batches
         train_examples = None
         num_train_steps = None
         num_warmup_steps = None
-        train_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[
-                                                                 -1] == '/' else args.quac_data_dir + '/val_v0.2.json'  # CHANGED TO VAL ONLY FOR TESTING
-        train_file = args.quac_data_dir + 'train_v0.2.json' if args.quac_data_dir[
-                                                                 -1] == '/' else args.quac_data_dir + '/train_v0.2.json'
+
         if args.load_small_portion:
-            train_examples = read_quac_examples(input_file=train_file, is_training=True)[:30]
+            train_examples = read_quac_examples(input_file=train_file, is_training=True)[:300]
         else:
             train_examples = read_quac_examples(input_file=train_file, is_training=True)
 
@@ -233,7 +204,14 @@ if __name__ == '__main__':
                                                               example_features_nums,
                                                               batch_size=args.batch_size, num_epoches=1, shuffle=True)
         num_batches = len(list(temp_train_batches))
-        print('len temp_train_batches', num_batches)
+
+
+        print("***** Running training *****")
+        print("  Num orig examples = ", len(train_examples))
+        print("  Num train_features = ", len(train_features))
+        print("  Num train batches = ", num_batches)
+        print("  Batch size = ", args.batch_size)
+        print("  Num steps = ", args.num_train_steps)
 
         global_step = 0
         epochs_trained = 0
@@ -244,31 +222,18 @@ if __name__ == '__main__':
             args.num_epochs = args.num_train_steps // num_batches + 1
 
         train_iterator = trange(
-            epochs_trained, int(args.num_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0],
+            epochs_trained, int(args.num_epochs), desc="Epoch", disable=False,
         )
-        set_seed(args)  # Added here for reproductibility
+        set_seed(args)
 
         model = MTLModel(args)
 
-        # if args.n_gpu > 1:
-        #     model = torch.nn.DataParallel(model)
-            # torch.distributed.init_process_group(backend="nccl")
-            # model = torch.nn.parallel.DistributedDataParallel(model)
-
-        # Distributed training (should be after apex fp16 initialization)
-        if args.local_rank != -1:
-            model = torch.nn.parallel.DistributedDataParallel(
-                model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True
-            )
 
         # model.to(device)
         model.zero_grad()
-        # print("MODEL PARAMETERS:", list(model.parameters()))
         # for name, param in model.named_parameters():
         #     if param.requires_grad:
         #         print(name, param.data)
-
-        # Declare your loss function; we have declared the optimizer for you
 
         optimizer = torch.optim.Adam(model.parameters(), lr=3e-5, eps=1e-6)
         scheduler = get_linear_schedule_with_warmup(
@@ -279,13 +244,10 @@ if __name__ == '__main__':
         lr_log = tqdm(total=0, position=4, bar_format='{desc}')
         losses = []
         for _ in train_iterator:
-            epoch_iterator = tqdm(train_batches, desc="Iteration", disable=args.local_rank not in [-1, 0], total=num_batches)
+            epoch_iterator = tqdm(train_batches, desc="Iteration", disable=False, total=num_batches)
             for step, batch in enumerate(epoch_iterator):
+                steps_trained_in_current_epoch += 1
                 batch_features, batch_slice_mask, batch_slice_num, output_features = batch
-
-#                input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(
-#                    0)  # TEST
-
                 model.train()
 
                 fd = convert_features_to_feed_dict(args, batch_features)  # feed_dict
@@ -311,47 +273,22 @@ if __name__ == '__main__':
                 reduce_mean_representation = torch.mean(bert_representation, 1)
                 history_attention_input = reduce_mean_representation
                 mtl_input = reduce_mean_representation
-                # (aux_start_logits, aux_end_logits) = cqa_model(bert_representation)
 
-                # inputs = {"bert_representation": bert_representation,
-                #           "history_attention_input": history_attention_input,
-                #           "mtl_input": mtl_input,
-                #           "batch_slice_mask": batch_slice_mask,
-                #           "batch_slice_num": batch_slice_num}
-
-                # new_bert_representation, new_mtl_input, attention_weights = model(**inputs)
-
-                # hist_attn_model = HistoryAttentionNet(args).to(device)
-
-                # new_bert_representation, new_mtl_input, attention_weights = hist_attn_model(bert_representation,
-                #                                                                                   history_attention_input,
-                #                                                                                   mtl_input,
-                #                                                                                   batch_slice_mask,
-                #                                                                                   batch_slice_num)
-
-                # new_bert_representation, new_mtl_input, attention_weights = history_attention_net(args, bert_representation,
-                #                                                                                   history_attention_input,
-                #                                                                                   mtl_input,
-                #                                                                                   batch_slice_mask,
-                #                                                                                   batch_slice_num)
-
-                # inputs = {"final_hidden": new_bert_representation.to(device),
-                #           "sentence_rep":new_mtl_input.to(device)}
-
-                # (start_logits, end_logits), yesno_logits, followup_logits = model(**inputs)
                 (start_logits, end_logits), yesno_logits, followup_logits = model(bert_representation,
-                                                                                                  history_attention_input,
-                                                                                                  mtl_input,
-                                                                                                  batch_slice_mask,
-                                                                                                  batch_slice_num)
+                                                                                  history_attention_input,
+                                                                                  mtl_input,
+                                                                                  batch_slice_mask,
+                                                                                  batch_slice_num)
 
                 total_loss = loss_fnct.compute_total_loss(fd, fd_output, start_logits, end_logits,
                                                           yesno_logits, followup_logits)
 
-                if step % 10 == 0:
+
+
+
+                if step % 1 == 0:
                     logging_loss = total_loss.item()
                     learning_rate_scalar = scheduler.get_last_lr()[0]
-                if step % 100 == 0:
                     losses.append(logging_loss)
                 loss_log.set_description_str(f'Current loss: {logging_loss}')
                 lr_log.set_description_str(f'Current learning rate: {learning_rate_scalar}')
@@ -366,15 +303,28 @@ if __name__ == '__main__':
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
+                if global_step > args.num_train_steps:
+                    output_dir = os.path.join(args.output_dir + 'saved_checkpoints/')
+                    # output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                    torch.save(model, output_dir + "checkpoint-{}".format(global_step))
+                    avg_loss = np.mean(losses)
+                    with open(args.output_dir + 'training_summary.txt', 'w') as f:
+                        f.write("Final loss: " + str(total_loss.item()) + '\n')
+                        f.write("Average loss: " + str(avg_loss) + '\n')
+                        f.write("Number of training steps: " + str(global_step) + '\n')
+                        f.write("Final learning rate: " + str(learning_rate_scalar) + '\n')
+                    break
 
                 # to reference for saving model
                 if args.save_steps > 0 and global_step % args.save_steps == 0:
                     # Save model checkpoint
-                    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+                    output_dir = os.path.join(args.output_dir + 'saved_checkpoints/')
+                    # output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
                     if not os.path.exists(output_dir):
                         os.makedirs(output_dir)
-
-                    torch.save(model, output_dir + '/practice.pt')
+                    torch.save(model, output_dir + "checkpoint-{}".format(global_step))
                     # https://pytorch.org/tutorials/beginner/saving_loading_models.html
 
 
@@ -388,35 +338,10 @@ if __name__ == '__main__':
                     # torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
                     # torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
                     # logger.info("Saving optimizer and scheduler states to %s", output_dir)
+            steps_trained_in_current_epoch = 0
 
         print("Final loss:", logging_loss)
         print("All losses:", losses)
-
-
-
-
-
-
-
-
-                ############################################################################################################
-                # if FLAGS.MTL:
-                #     cqa_loss = (start_loss + end_loss) / 2.0
-                #     if FLAGS.MTL_lambda < 1:
-                #         total_loss = FLAGS.MTL_mu * cqa_loss + FLAGS.MTL_lambda * yesno_loss + FLAGS.MTL_lambda * followup_loss
-                #     else:
-                #         total_loss = cqa_loss + yesno_loss + followup_loss
-                #     tf.summary.scalar('cqa_loss', cqa_loss)
-                #     tf.summary.scalar('yesno_loss', yesno_loss)
-                #     tf.summary.scalar('followup_loss', followup_loss)
-                # else:
-                #     total_loss = (start_loss + end_loss) / 2.0
-                ############################################################################################################
-
-                # print("Done with batch", step)
-
-
-
 
 
         # an estimation of num_train_steps

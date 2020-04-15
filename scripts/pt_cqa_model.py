@@ -6,7 +6,6 @@ import collections
 import json
 import math
 import os
-import tensorflow as tf
 from argparse import ArgumentParser
 import torch
 from transformers import BertPreTrainedModel, BertConfig, BertTokenizer
@@ -865,8 +864,6 @@ class MTLLoss():
         end_probs = softmax(end_logits)
         end_prob = torch.max(end_probs, axis=-1)
 
-
-
         # get the losses - the start loss is for identifying the correct start of the answer span,
         # end loss is identifying the correct end of the answer span
 
@@ -888,6 +885,7 @@ class MTLLoss():
                 total_loss = cqa_loss + yesno_loss + followup_loss
         else:
             total_loss = (start_loss + end_loss) / 2.0
+
         return total_loss
 
     def compute_cqa_loss(self, logits, positions, seq_length):
@@ -901,16 +899,3 @@ class MTLLoss():
         logpy = torch.gather(logp, 1, Variable(labels.view(-1, 1)))
         loss = -(logpy).mean()
         return loss
-
-    # def compute_cqa_loss(self, logits, positions, seq_length):
-    #     one_hot_positions = torch.nn.functional.one_hot(positions, seq_length).to('cuda:2')
-    #     log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-    #     loss = -torch.mean(torch.sum(one_hot_positions * log_probs, dim=-1))
-    #     loss = loss.to('cuda:3')
-    #     return loss
-    #
-    # def compute_sparse_softmax_cross_entropy(self, logits, labels):
-    #     logp = torch.nn.functional.log_softmax(logits, dim=-1)
-    #     logpy = torch.gather(logp, 1, Variable(labels.view(-1, 1)).to('cuda:3'))
-    #     loss = -(logpy).mean()
-    #     return loss
