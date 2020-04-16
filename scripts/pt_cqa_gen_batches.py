@@ -75,4 +75,4 @@ def cqa_gen_example_aware_batches_v2(features, example_tracker, variation_tracke
             batch_slice_mask += [1] * (batch_size - len(batch_slice_mask))
             yield batch_features, batch_slice_mask, batch_slice_num, output_features
 
-        print('epoch finished!', 'shuffle={}'.format(shuffle))
+        # print('epoch finished!', 'shuffle={}'.format(shuffle))

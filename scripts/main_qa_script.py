@@ -19,8 +19,10 @@ import numpy as np
 from copy import deepcopy
 import pickle
 import itertools
-from time import time
+import time
+# from time import time
 import traceback
+import datetime
 
 from tqdm import tqdm, trange
 import logging
@@ -40,7 +42,6 @@ try:
 except ImportError:
     from tensorboardX import SummaryWriter
 
-
 def set_seed(args):
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -51,6 +52,8 @@ def set_seed(args):
 logger = logging.getLogger(__name__)
 
 if __name__ == '__main__':
+    date_and_time = datetime.datetime.now()
+    start_time = time.time()
 
     parser = ArgumentParser(
         description='QA model')
@@ -82,6 +85,7 @@ if __name__ == '__main__':
     parser.add_argument("--aux_shared", default=False, type=bool,
                         help="wheter to share the aux prediction layer with the main convqa model")
     parser.add_argument("--disable_attention", action="store_true", help="disable the history attention module")
+    parser.add_argument("--fine_grained_attention", action="store_true", help="Use fine-grained history attention module")
     parser.add_argument("--batch_size", default=24, type=int, help="Batch size for training and predicting")
     parser.add_argument("--num_epochs", default=0, type=int, help="Number of training epochs")
     parser.add_argument("--do_MTL", default=True, type=bool, help="Whether to do multi-task learning")
@@ -113,6 +117,7 @@ if __name__ == '__main__':
 
     # get the BERT config using huggingface
     bert_config = BertConfig.from_pretrained(args.bert_version)
+    args.bert_config = bert_config
 
     tb_writer = SummaryWriter()
 
@@ -197,9 +202,7 @@ if __name__ == '__main__':
                 pickle.dump(example_features_nums, handle)
             print('train features generated')
 
-        train_batches = cqa_gen_example_aware_batches_v2(train_features, example_tracker, variation_tracker,
-                                                         example_features_nums,
-                                                         batch_size=args.batch_size, num_epoches=1, shuffle=False)
+
         temp_train_batches = cqa_gen_example_aware_batches_v2(train_features, example_tracker, variation_tracker,
                                                               example_features_nums,
                                                               batch_size=args.batch_size, num_epoches=1, shuffle=True)
@@ -221,12 +224,10 @@ if __name__ == '__main__':
             t_total = args.num_train_steps
             args.num_epochs = args.num_train_steps // num_batches + 1
 
-        train_iterator = trange(
-            epochs_trained, int(args.num_epochs), desc="Epoch", disable=False,
-        )
         set_seed(args)
 
         model = MTLModel(args)
+
 
 
         # model.to(device)
@@ -240,9 +241,16 @@ if __name__ == '__main__':
             optimizer, num_warmup_steps=args.num_warmup_steps, num_training_steps=args.num_train_steps
         )
         loss_fnct = MTLLoss(args)
-        loss_log = tqdm(total=0, position=3, bar_format='{desc}')
-        lr_log = tqdm(total=0, position=4, bar_format='{desc}')
+        loss_log = tqdm(total=0, position=2, bar_format='{desc}')
+        lr_log = tqdm(total=0, position=3, bar_format='{desc}')
         losses = []
+
+        train_iterator = trange(
+            epochs_trained, int(args.num_epochs), desc="Epoch", disable=False,
+        )
+        train_batches = cqa_gen_example_aware_batches_v2(train_features, example_tracker, variation_tracker,
+                                                         example_features_nums,
+                                                         batch_size=args.batch_size, num_epoches=1, shuffle=True)
         for _ in train_iterator:
             epoch_iterator = tqdm(train_batches, desc="Iteration", disable=False, total=num_batches)
             for step, batch in enumerate(epoch_iterator):
@@ -254,39 +262,16 @@ if __name__ == '__main__':
 
                 fd_output = convert_features_to_feed_dict(args, output_features)
 
-                ## the below is just for my reference to know what's in the feed dict - kathryn
+                if args.do_MTL:
+                    (start_logits, end_logits), yesno_logits, followup_logits = model(fd, fd_output,
+                                                                                      batch_slice_mask, batch_slice_num)
+                    total_loss = loss_fnct.compute_total_loss(fd_output, start_logits, end_logits,
+                                                              yesno_logits, followup_logits)
+                else:
+                    start_logits, end_logits = model(fd, fd_output, batch_slice_mask, batch_slice_num)
+                    total_loss = loss_fnct.compute_total_loss(fd_output, start_logits, end_logits)
 
-                # feed_dict = {'unique_ids': batch_unique_ids, 'input_ids': batch_input_ids,
-                #              'input_mask': batch_input_mask, 'segment_ids': batch_segment_ids,
-                #              'start_positions': batch_start_positions, 'end_positions': batch_end_positions,
-                #              'history_answer_marker': batch_history_answer_marker, 'yesno': batch_yesno,
-                #              'followup': batch_followup,
-                #              'metadata': batch_metadata}
-
-                bert_representation, cls_representation = bert_rep(args, bert_config, is_training=True,
-                                                                   input_ids=fd['input_ids'],
-                                                                   input_mask=fd['input_mask'],
-                                                                   segment_ids=fd['segment_ids'],
-                                                                   history_answer_marker=fd['history_answer_marker'],
-                                                                   use_one_hot_embeddings=True)
-
-                reduce_mean_representation = torch.mean(bert_representation, 1)
-                history_attention_input = reduce_mean_representation
-                mtl_input = reduce_mean_representation
-
-                (start_logits, end_logits), yesno_logits, followup_logits = model(bert_representation,
-                                                                                  history_attention_input,
-                                                                                  mtl_input,
-                                                                                  batch_slice_mask,
-                                                                                  batch_slice_num)
-
-                total_loss = loss_fnct.compute_total_loss(fd, fd_output, start_logits, end_logits,
-                                                          yesno_logits, followup_logits)
-
-
-
-
-                if step % 1 == 0:
+                if step % 10 == 0:
                     logging_loss = total_loss.item()
                     learning_rate_scalar = scheduler.get_last_lr()[0]
                     losses.append(logging_loss)
@@ -296,7 +281,7 @@ if __name__ == '__main__':
                 optimizer.zero_grad()
                 total_loss.backward()
 
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
 
                 optimizer.step()
 
@@ -310,11 +295,17 @@ if __name__ == '__main__':
                         os.makedirs(output_dir)
                     torch.save(model, output_dir + "checkpoint-{}".format(global_step))
                     avg_loss = np.mean(losses)
+                    runtime_mins = (time.time() - start_time)/60
                     with open(args.output_dir + 'training_summary.txt', 'w') as f:
+                        f.write("Summary of training executed on " + date_and_time.strftime('%d') + ' ' +
+                                date_and_time.strftime("%B") + ' ' + date_and_time.strftime('%Y') + ' at ' +
+                                date_and_time.strftime('%H') + ':' + date_and_time.strftime('%M') + '\n')
                         f.write("Final loss: " + str(total_loss.item()) + '\n')
                         f.write("Average loss: " + str(avg_loss) + '\n')
                         f.write("Number of training steps: " + str(global_step) + '\n')
                         f.write("Final learning rate: " + str(learning_rate_scalar) + '\n')
+                        f.write("Training time: " + str(round(runtime_mins)) + ' minutes' + '\n')
+
                     break
 
                 # to reference for saving model
@@ -339,18 +330,14 @@ if __name__ == '__main__':
                     # torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
                     # logger.info("Saving optimizer and scheduler states to %s", output_dir)
             steps_trained_in_current_epoch = 0
+            train_batches = cqa_gen_example_aware_batches_v2(train_features, example_tracker, variation_tracker,
+                                                             example_features_nums,
+                                                             batch_size=args.batch_size, num_epoches=1, shuffle=True)
 
         print("Final loss:", logging_loss)
         print("All losses:", losses)
 
 
-        # an estimation of num_train_steps
-        # num_train_steps = int((math.ceil(len(train_examples) * 1.5 / FLAGS.train_batch_size)) * FLAGS.num_train_epochs)
-        # we cannot predict the exact training steps because of the "example-aware" batching,
-        # so we run some initial experiments and found out the exact training steps
-        # num_train_steps = 11438 * FLAGS.num_train_epochs
-#        num_train_steps = args.train_steps
-#        num_warmup_steps = int(num_train_steps * args.warmup_proportion)
 
 #    if args.do_predict:
         # read in validation data, generate val features
