@@ -134,10 +134,6 @@ def read_quac_examples(input_file, is_training):
         return False
 
     examples = []
-    # if FLAGS.load_small_portion:
-    #     input_data = input_data[:10]
-    #     print('input_data:', input_data)
-    #     tf.logging.warning('<<<<<<<<<< load_small_portion is on! >>>>>>>>>>')
     for entry in input_data:
         # An additional "CANNOTANSWER" has been added in QuAC data, so no need to append one.
         entry = entry['paragraphs'][0]
@@ -428,7 +424,6 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 doc_offset = len(query_tokens) + 2
                 start_position = tok_start_position - doc_start + doc_offset
                 end_position = tok_end_position - doc_start + doc_offset
-
 
 
             features.append(
@@ -874,7 +869,7 @@ def fix_history_answer_marker_for_bhae(sub_batch_history_answer_marker, turn_fea
     return res
 
 def convert_examples_to_variations_and_then_features(examples, tokenizer, max_seq_length, 
-                                doc_stride, max_query_length, max_considered_history_turns, is_training):
+                                doc_stride, max_query_length, max_considered_history_turns, is_training=True):
     # different from the "convert_examples_to_features" in cqa_supports.py, we return two masks with the feature (example/variation trackers).
     # the first mask is the example index, and the second mask is the variation index. Wo do this to keep track of the features generated
     # by different examples and variations.
@@ -972,7 +967,6 @@ def convert_features_to_feed_dict(args, features):
         batch_input_mask = torch.cat((batch_input_mask,torch.LongTensor([feature.input_mask])), 0)
         batch_segment_ids = torch.cat((batch_segment_ids, torch.LongTensor([feature.segment_ids])), 0)
         batch_start_positions = torch.cat((batch_start_positions, torch.LongTensor([feature.start_position])), 0)
-        # batch_start_positions = torch.cat((batch_start_positions, torch.LongTensor([feature.start_position])), 0)
         batch_end_positions = torch.cat((batch_end_positions,torch.LongTensor([feature.end_position])), )
         batch_history_answer_marker = torch.cat((batch_history_answer_marker, torch.LongTensor([feature.history_answer_marker])), 0)
         batch_yesno = torch.cat((batch_yesno, torch.LongTensor([yesno_dict[feature.metadata['yesno']]])), 0)

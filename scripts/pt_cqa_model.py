@@ -87,7 +87,7 @@ class CQABertModel(nn.Module):
         self.args = args
         self.model = BertModel(config, self.args)
         if self.args.n_gpu > 1:
-            self.model = torch.nn.DataParallel(self.model)
+            self.model = nn.DataParallel(self.model)
         self.model.to(args.device)
 
     def forward(self, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings):
@@ -143,8 +143,7 @@ class YesNoModel(nn.Module):
     def __init__(self, args):
         super(YesNoModel, self).__init__()
         self.args = args
-        self.linear_layer = torch.nn.Linear(self.args.bert_hidden, 3, bias=False)
-        # torch.nn.init.normal_(self.linear_layer.weight, std=0.02)
+        self.linear_layer = nn.Linear(self.args.bert_hidden, 3, bias=False)
         trunc_normal_(self.linear_layer.weight, std=0.02)
 
     def forward(self, sent_rep):
@@ -155,7 +154,7 @@ class FollowUpModel(nn.Module):
     def __init__(self, args):
         super(FollowUpModel, self).__init__()
         self.args = args
-        self.linear_layer = torch.nn.Linear(self.args.bert_hidden, 3, bias=False)
+        self.linear_layer = nn.Linear(self.args.bert_hidden, 3, bias=False)
         trunc_normal_(self.linear_layer.weight, std=0.02)
 
     def forward(self, sent_rep):
@@ -163,16 +162,16 @@ class FollowUpModel(nn.Module):
         return logits
 
 
-class HistoryAttentionNet(torch.nn.Module):
+class HistoryAttentionNet(nn.Module):
     def __init__(self, args):
         super(HistoryAttentionNet, self).__init__()
         self.args = args
-        self.layer_linear = torch.nn.Linear(self.args.bert_hidden, 1)
+        self.layer_linear = nn.Linear(self.args.bert_hidden, 1)
         trunc_normal_(self.layer_linear.weight, std=0.02)
 
     def pad_fn(self, x, num):
         # pad the splits so that all of them are of size (11, 4)
-        padding = torch.nn.ZeroPad2d((0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the top
+        padding = nn.ZeroPad2d((0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the top
         return padding(x)
 
     def sequence_mask(self, lengths, maxlen):
@@ -216,7 +215,7 @@ class HistoryAttentionNet(torch.nn.Module):
             of each variation to the aggregated representation of its example/sub-passage
         """
         # pad history_attention_input: (8, 3) --> (13, 3)
-        padding = torch.nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num)) # padding at the bottom
+        padding = nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num)) # padding at the bottom
         history_attention_input = padding(history_attention_input)
 
         # split history_attention_input into 8 tensors of sizes: (3, 4), (3, 4), (2, 4), (1, 4), (1, 4), (1, 4), (1, 4), (1, 4)
@@ -260,7 +259,7 @@ class HistoryAttentionNet(torch.nn.Module):
         #### GENERATE TENSOR: new_mtl_input ####
 
         # pad mtl_input: (8, 3) --> (13, 3)
-        padding = torch.nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num))  # padding at the bottom
+        padding = nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num))  # padding at the bottom
         mtl_input = padding(mtl_input)
 
         # split mtl_input into tensors of sizes: (3, 4), (3, 4), (2, 4), (1, 4), (1, 4), (1, 4), (1, 4), (1, 4)
@@ -290,7 +289,7 @@ class HistoryAttentionNet(torch.nn.Module):
         splits = torch.split(bert_representation, slice_mask, 0)
 
         # pad the splits so that all of them are of size (11, 12, 4)
-        pad_fn = lambda x, num: torch.nn.functional.pad(x, (
+        pad_fn = lambda x, num: nn.functional.pad(x, (
         0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
         padded = []
         for i in range(self.args.batch_size):
@@ -342,7 +341,7 @@ class DisableHistoryAttentionNet(nn.Module):
         return x[tuple(indices)]
 
     def pad_fn(self, x, num):
-        padding = torch.nn.ZeroPad2d((0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the top
+        padding = nn.ZeroPad2d((0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the top
         return padding(x)
 
     def forward(self, bert_representation, mtl_input, slice_mask, slice_num, history_attention_input):
@@ -374,7 +373,7 @@ class DisableHistoryAttentionNet(nn.Module):
         #### GENERATE TENSOR: probs ####
 
         # pad history_attention_input: (8, 3) --> (13, 3)
-        padding = torch.nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num))  # padding at the bottom
+        padding = nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num))  # padding at the bottom
         history_attention_input = padding(history_attention_input)
 
         # split history_attention_input into 8 tensors of sizes: (3, 4), (3, 4), (2, 4), (1, 4), (1, 4), (1, 4), (1, 4), (1, 4)
@@ -413,7 +412,7 @@ class DisableHistoryAttentionNet(nn.Module):
         #### GENERATE TENSOR: new_mtl_input ####
 
         # pad mtl_input: (8, 3) --> (13, 3)
-        padding = torch.nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num))  # padding at the bottom
+        padding = nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num))  # padding at the bottom
         mtl_input = padding(mtl_input)
 
         # split mtl_input into tensors of sizes: (3, 4), (3, 4), (2, 4), (1, 4), (1, 4), (1, 4), (1, 4), (1, 4)
@@ -436,14 +435,14 @@ class DisableHistoryAttentionNet(nn.Module):
         #### GENERATE TENSOR: new_bert_representation ####
 
         # pad bert_representation: (8, 12, 4) --> (13, 12, 4)
-        bert_representation = torch.nn.functional.pad(bert_representation, (
+        bert_representation = nn.functional.pad(bert_representation, (
         0, 0, 0, 0, 0, self.args.batch_size - slice_num))  # padding at the back
 
         # split mtl_input into tensors of sizes: (3, 12, 4), (3, 12, 4), (2, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4)
         splits = torch.split(bert_representation, slice_mask, 0)
 
         # pad the splits so that all of them are of size (11, 12, 4)
-        pad_fn = lambda x, num: torch.nn.functional.pad(x, (
+        pad_fn = lambda x, num: nn.functional.pad(x, (
         0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
         padded = []
         for i in range(self.args.batch_size):
@@ -471,7 +470,7 @@ class FineGrainedHistoryAttentionNet(nn.Module):
     def __init__(self, args):
         super(FineGrainedHistoryAttentionNet, self).__init__()
         self.args = args
-        self.layer_linear = torch.nn.Linear(self.args.bert_hidden, 1)
+        self.layer_linear = nn.Linear(self.args.bert_hidden, 1)
         trunc_normal_(self.layer_linear.weight, std=0.02)
 
     def sequence_mask(self, lengths, maxlen):
@@ -502,14 +501,14 @@ class FineGrainedHistoryAttentionNet(nn.Module):
         bert_representation = torch.cat((bert_representation, torch.unsqueeze(mtl_input, dim=1)), dim=1)
 
         # pad bert_representation: (8, 13, 4) --> (13, 13, 4)
-        bert_representation = torch.nn.functional.pad(bert_representation, (
+        bert_representation = nn.functional.pad(bert_representation, (
         0, 0, 0, 0, 0, self.args.batch_size - slice_num))  # padding at the back
 
         # split bert_representation into 8 tensors of sizes: (3, 13, 4), (3, 13, 4), (2, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4)
         splits = torch.split(bert_representation, slice_mask, 0)
 
         # pad the splits so that all of them are of size (11, 13, 4)
-        pad_fn = lambda x, num: torch.nn.functional.pad(x, (
+        pad_fn = lambda x, num: nn.functional.pad(x, (
         0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
         padded = []
         for i in range(self.args.batch_size):
@@ -581,7 +580,7 @@ class MTLModel(nn.Module):
             self.ham = HistoryAttentionNet(self.args).to(args.device)
 
 
-    def forward(self, fd, fd_output, batch_slice_mask, batch_slice_num):
+    def forward(self, fd, batch_slice_mask, batch_slice_num):
         # encode everything with the BERT model
         bert_representation, cls_representation = self.bert_model(input_ids=fd['input_ids'],
                                                                   input_mask=fd['input_mask'],
@@ -602,9 +601,9 @@ class MTLModel(nn.Module):
                                                                                  self.args.device))
 
         if self.args.do_MTL:
-            return (self.cqa(new_bert_representation), self.yesno(new_mtl_input), self.followup(new_mtl_input),)
+            return (self.cqa(new_bert_representation), self.yesno(new_mtl_input), self.followup(new_mtl_input), attention_weights)
         else:
-            return (self.cqa(new_bert_representation),)
+            return (self.cqa(new_bert_representation), attention_weights)
 
 
 class MTLLoss():
@@ -635,7 +634,6 @@ class MTLLoss():
         end_loss = self.compute_cqa_loss(end_logits, fd_output['end_positions'], self.args.max_seq_length)
 
 
-
         if self.args.do_MTL:
             cqa_loss = (start_loss + end_loss) / 2.0
             yesno_labels = fd_output['yesno']
@@ -662,8 +660,8 @@ class MTLLoss():
         :param seq_length: Max sequence length
         :return: loss
         """
-        one_hot_positions = torch.nn.functional.one_hot(positions, seq_length)
-        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+        one_hot_positions = nn.functional.one_hot(positions, seq_length)
+        log_probs = nn.functional.log_softmax(logits, dim=-1)
         loss = -torch.mean(torch.sum(one_hot_positions * log_probs, dim=-1))
         return loss
 
@@ -674,7 +672,7 @@ class MTLLoss():
         :param labels: Correct labels
         :return: loss
         """
-        logp = torch.nn.functional.log_softmax(logits, dim=-1)
+        logp = nn.functional.log_softmax(logits, dim=-1)
         logpy = torch.gather(logp, 1, Variable(labels.view(-1, 1)))
         loss = -(logpy).mean()
         return loss
