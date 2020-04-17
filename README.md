@@ -17,5 +17,5 @@ Rewritten scripts:
 	- fine_grained_history_attention_net 		[READY]<br>
 
 
-To run main script from within the 'script' directory: (14.04.2020) <br>
-python main_qa_script.py --do_train --quac_data_dir ../data/ --cache_dir ../data/practice --do_predict --output_dir ../exps_dir --overwrite_output_dir --batch_size 24
+To run main script from within the 'script' directory: (17.04.2020) <br>
+python main_qa_script.py --quac_data_dir ../data/ --cache_dir ../data/practice --output_dir ../exps_dir --batch_size 24 --do_train --do_eval
