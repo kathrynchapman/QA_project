@@ -523,7 +523,7 @@ if __name__ == '__main__':
         os.makedirs(args.output_dir + '/summaries/val/')
         os.makedirs(args.output_dir + '/summaries/rl/')
 
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    tokenizer = BertTokenizer.from_pretrained(args.bert_version)
 
     dev_file = args.quac_data_dir + 'val_v0.2.json' if args.quac_data_dir[
                                                            -1] == '/' else args.quac_data_dir + '/val_v0.2.json'  # CHANGED TO VAL ONLY FOR TESTING
