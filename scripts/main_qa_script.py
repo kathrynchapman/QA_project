@@ -201,7 +201,7 @@ def train(train_file, tokenizer):
             logging_loss = total_loss.item()
             losses.append(logging_loss)
 
-            if step % 10 == 0:
+            if step % 5 == 0:
                 learning_rate_scalar = scheduler.get_last_lr()[0]
                 loss_log.set_description_str(f'Current loss: {logging_loss}')
             lr_log.set_description_str(f'Current learning rate: {learning_rate_scalar}')
@@ -285,145 +285,148 @@ def evaluate(dev_file, tokenizer):
     yesno_list, followup_list = [], []
 
     if args.eval_checkpoint:
-        checkpoint_to_evaluate = 'checkpoint-' + args.eval_checkpoint
+        checkpoints_to_evaluate = ['checkpoint-' + args.eval_checkpoint]
+    elif args.eval_all_checkpoints:
+        checkpoints_to_evaluate = listdir(args.output_dir + 'saved_checkpoints/')
     else:
         # choose the checkpoint directory ending in the highest number (i.e. the last saved checkpoint)
-        checkpoint_to_evaluate = 'checkpoint-' + str(
+        checkpoints_to_evaluate = ['checkpoint-' + str(
             max([int(f.split('-')[1]) for f in listdir(args.output_dir + 'saved_checkpoints/') if
-                 isdir(join(args.output_dir + 'saved_checkpoints/', f))]))
+                 isdir(join(args.output_dir + 'saved_checkpoints/', f))]))]
 
-    state_dict_path = '{}saved_checkpoints/{}/state_dict.pt'.format(args.output_dir,
-        checkpoint_to_evaluate)
+    for checkpoint in checkpoints_to_evaluate:
 
-    model = MTLModel(args)
+        state_dict_path = '{}saved_checkpoints/{}/state_dict.pt'.format(args.output_dir,
+                                                                        checkpoint)
 
-    model.load_state_dict(torch.load(state_dict_path))
+        model = MTLModel(args)
 
-    dev_features, dev_example_tracker, dev_variation_tracker, dev_example_features_nums, \
-    dev_num_batches, dev_examples = load_data(dev_file, tokenizer)
+        model.load_state_dict(torch.load(state_dict_path))
 
+        dev_features, dev_example_tracker, dev_variation_tracker, dev_example_features_nums, \
+        dev_num_batches, dev_examples = load_data(dev_file, tokenizer)
 
-    print("***** Running evaluation *****")
-    print("  Num orig examples = ", len(dev_examples))
-    print("  Num dev_features = ", len(dev_features))
-    print("  Num dev batches = ", dev_num_batches)
-    print("  Batch size = ", args.batch_size)
+        print("***** Running evaluation *****")
+        print("  Num orig examples = ", len(dev_examples))
+        print("  Num dev_features = ", len(dev_features))
+        print("  Num dev batches = ", dev_num_batches)
+        print("  Batch size = ", args.batch_size)
 
-    set_seed(args)
-
-
-    dev_batches = cqa_gen_example_aware_batches_v2(dev_features, dev_example_tracker, dev_variation_tracker,
-                                                     dev_example_features_nums,
-                                                     batch_size=args.batch_size, num_epoches=1, shuffle=False)
-
-    dev_iterator = tqdm(dev_batches, desc="Iteration", disable=False, total=dev_num_batches)
-    for step, batch in enumerate(dev_iterator):
-        model.eval()
-        batch_results = []
-        batch_features, batch_slice_mask, batch_slice_num, output_features = batch
+        set_seed(args)
 
 
-        all_output_features.extend(output_features)
+        dev_batches = cqa_gen_example_aware_batches_v2(dev_features, dev_example_tracker, dev_variation_tracker,
+                                                         dev_example_features_nums,
+                                                         batch_size=args.batch_size, num_epoches=1, shuffle=False)
 
-        fd = convert_features_to_feed_dict(args, batch_features)  # feed_dict
-
-        fd_output = convert_features_to_feed_dict(args, output_features)
-
-
-        with torch.no_grad():
-            inputs = {
-                "fd": fd,
-                "batch_slice_mask": batch_slice_mask,
-                "batch_slice_num": batch_slice_num,
-            }
-
-            if args.do_MTL:
-                (start_logits, end_logits), yesno_logits, followup_logits, attention_weights = model(**inputs)
-            else:
-                start_logits, end_logits, attention_weights = model(**inputs)
+        dev_iterator = tqdm(dev_batches, desc="Iteration", disable=False, total=dev_num_batches)
+        for step, batch in enumerate(dev_iterator):
+            model.eval()
+            batch_results = []
+            batch_features, batch_slice_mask, batch_slice_num, output_features = batch
 
 
+            all_output_features.extend(output_features)
 
-        key = (tuple([dev_examples[f.example_index].qas_id for f in output_features]), step)
-        attention_dict[key] = {'batch_slice_mask': batch_slice_mask, 'attention_weights_res': attention_weights,
-                               'batch_slice_num': batch_slice_num, 'len_batch_features': len(batch_features),
-                               'len_output_features': len(output_features)}
+            fd = convert_features_to_feed_dict(args, batch_features)  # feed_dict
 
-        for each_unique_id, each_start_logits, each_end_logits, each_yesno_logits, each_followup_logits \
-                in zip(fd_output['unique_ids'], start_logits, end_logits, yesno_logits,
-                       followup_logits):
-            each_unique_id = int(each_unique_id)
-            each_start_logits = [float(x) for x in each_start_logits.tolist()]
-            each_end_logits = [float(x) for x in each_end_logits.tolist()]
-            each_yesno_logits = [float(x) for x in each_yesno_logits.tolist()]
-            each_followup_logits = [float(x) for x in each_followup_logits.tolist()]
-            batch_results.append(RawResult(unique_id=each_unique_id, start_logits=each_start_logits,
-                                           end_logits=each_end_logits, yesno_logits=each_yesno_logits,
-                                           followup_logits=each_followup_logits))
-
-        all_results.extend(batch_results)
+            fd_output = convert_features_to_feed_dict(args, output_features)
 
 
-    output_prediction_file = os.path.join(args.output_dir, "predictions_{}.json".format(step))
-    output_nbest_file = os.path.join(args.output_dir, "nbest_predictions_{}.json".format(step))
-    output_null_log_odds_file = os.path.join(args.output_dir, "output_null_log_odds_file_{}.json".format(step))
+            with torch.no_grad():
+                inputs = {
+                    "fd": fd,
+                    "batch_slice_mask": batch_slice_mask,
+                    "batch_slice_num": batch_slice_num,
+                }
+
+                if args.do_MTL:
+                    (start_logits, end_logits), yesno_logits, followup_logits, attention_weights = model(**inputs)
+                else:
+                    start_logits, end_logits, attention_weights = model(**inputs)
 
 
-    write_predictions(dev_examples, all_output_features, all_results,
-                      args.n_best_size, args.max_answer_length,
-                      args.do_lower_case, output_prediction_file,
-                      output_nbest_file, output_null_log_odds_file)
 
-    # -----------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------
+            key = (tuple([dev_examples[f.example_index].qas_id for f in output_features]), step)
+            attention_dict[key] = {'batch_slice_mask': batch_slice_mask, 'attention_weights_res': attention_weights,
+                                   'batch_slice_num': batch_slice_num, 'len_batch_features': len(batch_features),
+                                   'len_output_features': len(output_features)}
 
-    # time6 = time()
-    # print('write all val predictions', time6-time5)
-    val_total_loss_value = np.average(val_total_loss)
+            for each_unique_id, each_start_logits, each_end_logits, each_yesno_logits, each_followup_logits \
+                    in zip(fd_output['unique_ids'], start_logits, end_logits, yesno_logits,
+                           followup_logits):
+                each_unique_id = int(each_unique_id)
+                each_start_logits = [float(x) for x in each_start_logits.tolist()]
+                each_end_logits = [float(x) for x in each_end_logits.tolist()]
+                each_yesno_logits = [float(x) for x in each_yesno_logits.tolist()]
+                each_followup_logits = [float(x) for x in each_followup_logits.tolist()]
+                batch_results.append(RawResult(unique_id=each_unique_id, start_logits=each_start_logits,
+                                               end_logits=each_end_logits, yesno_logits=each_yesno_logits,
+                                               followup_logits=each_followup_logits))
 
-    # call the official evaluation script
-    # val_summary = tf.Summary()
-    # time7 = time()
-    val_file_json = json.load(open(dev_file, 'r'))['data']
-    val_eval_res = external_call(val_file_json, output_prediction_file)
-    # time8 = time()
-    # print('external call', time8-time7)
-    val_f1 = val_eval_res['f1']
-    val_followup = val_eval_res['followup']
-    val_yesno = val_eval_res['yes/no']
-    val_heq = val_eval_res['HEQ']
-    val_dheq = val_eval_res['DHEQ']
-
-    heq_list.append(val_heq)
-    dheq_list.append(val_dheq)
-    yesno_list.append(val_yesno)
-    followup_list.append(val_followup)
-
-    # val_summary.value.add(tag="followup", simple_value=val_followup)
-    # val_summary.value.add(tag="val_yesno", simple_value=val_yesno)
-    # val_summary.value.add(tag="val_heq", simple_value=val_heq)
-    # val_summary.value.add(tag="val_dheq", simple_value=val_dheq)
-
-    print('evaluation: {}, total_loss: {}, f1: {}, followup: {}, yesno: {}, heq: {}, dheq: {}\n'.format(
-        step, val_total_loss_value, val_f1, val_followup, val_yesno, val_heq, val_dheq))
-    with open(args.output_dir + 'step_result.txt', 'a') as fout:
-        fout.write('{},{},{},{},{},{},{}\n'.format(step, val_f1, val_heq, val_dheq,
-                                                   val_yesno, val_followup, args.output_dir))
-
-    # val_summary.value.add(tag="total_loss", simple_value=val_total_loss_value)
-    # val_summary.value.add(tag="f1", simple_value=val_f1)
-    f1_list.append(val_f1)
-    # val_summary_writer.add_summary(val_summary, step)
-    # val_summary_writer.flush()
-
-    # save_path = saver.save(sess, '{}/model_{}.ckpt'.format(FLAGS.output_dir, step))
-    # print('Model saved in path', save_path)
+            all_results.extend(batch_results)
 
 
-    # -----------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------
+        output_prediction_file = os.path.join(args.output_dir, "predictions_{}.json".format(step))
+        output_nbest_file = os.path.join(args.output_dir, "nbest_predictions_{}.json".format(step))
+        output_null_log_odds_file = os.path.join(args.output_dir, "output_null_log_odds_file_{}.json".format(step))
+
+
+        write_predictions(dev_examples, all_output_features, all_results,
+                          args.n_best_size, args.max_answer_length,
+                          args.do_lower_case, output_prediction_file,
+                          output_nbest_file, output_null_log_odds_file)
+
+        # -----------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------
+
+        # time6 = time()
+        # print('write all val predictions', time6-time5)
+        val_total_loss_value = np.average(val_total_loss)
+
+        # call the official evaluation script
+        # val_summary = tf.Summary()
+        # time7 = time()
+        val_file_json = json.load(open(dev_file, 'r'))['data']
+        val_eval_res = external_call(val_file_json, output_prediction_file)
+        # time8 = time()
+        # print('external call', time8-time7)
+        val_f1 = val_eval_res['f1']
+        val_followup = val_eval_res['followup']
+        val_yesno = val_eval_res['yes/no']
+        val_heq = val_eval_res['HEQ']
+        val_dheq = val_eval_res['DHEQ']
+
+        heq_list.append(val_heq)
+        dheq_list.append(val_dheq)
+        yesno_list.append(val_yesno)
+        followup_list.append(val_followup)
+
+        # val_summary.value.add(tag="followup", simple_value=val_followup)
+        # val_summary.value.add(tag="val_yesno", simple_value=val_yesno)
+        # val_summary.value.add(tag="val_heq", simple_value=val_heq)
+        # val_summary.value.add(tag="val_dheq", simple_value=val_dheq)
+
+        print('evaluation: {}, total_loss: {}, f1: {}, followup: {}, yesno: {}, heq: {}, dheq: {}\n'.format(
+            step, val_total_loss_value, val_f1, val_followup, val_yesno, val_heq, val_dheq))
+        with open(args.output_dir + 'step_result.txt', 'a') as fout:
+            fout.write('{},{},{},{},{},{},{}\n'.format(step, val_f1, val_heq, val_dheq,
+                                                       val_yesno, val_followup, args.output_dir))
+
+        # val_summary.value.add(tag="total_loss", simple_value=val_total_loss_value)
+        # val_summary.value.add(tag="f1", simple_value=val_f1)
+        f1_list.append(val_f1)
+        # val_summary_writer.add_summary(val_summary, step)
+        # val_summary_writer.flush()
+
+        # save_path = saver.save(sess, '{}/model_{}.ckpt'.format(FLAGS.output_dir, step))
+        # print('Model saved in path', save_path)
+
+
+        # -----------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------
 
 
 
@@ -480,6 +483,7 @@ if __name__ == '__main__':
     parser.add_argument("--n_best_size", default=20, type=int, help="The total number of n-best predictions to generate in the nbest_predictions.json output file.")
     parser.add_argument('--max_answer_length', default=50, type=int, help="The maximum length of an answer that can be generated. This is needed because the start and end predictions are not conditioned on one another.")
     parser.add_argument("--do_lower_case", default=True, type=bool, help="Whether to lower case the input text. Should be True for uncased models and False for cased models.")
+    parser.add_argument("--eval_all_checkpoints", action='store_true', help='Run eval script on all saved checkpoints. (Warning: will take a while)')
     args = parser.parse_args()
     args.output_dir = args.output_dir + '/' if args.output_dir[-1] != '/' else args.output_dir
     args.num_warmup_steps = int(args.num_train_steps * args.warmup_proportion)
