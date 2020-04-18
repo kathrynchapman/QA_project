@@ -516,9 +516,11 @@ class FineGrainedHistoryAttentionNet(nn.Module):
 
         # stack the splits to form a token_tensor of size (8, 11, 13, 4)
         token_tensor = torch.stack(padded, axis=0)
+        token_tensor.reshape(self.args.batch_size, self.args.max_considered_history_turns, self.args.max_seq_length + 1, self.args.bert_hidden)
 
         # permute dimensions in token_tensor: (8, 13, 11, 4)
         token_tensor_t = token_tensor.permute(0, 2, 1, 3)
+
 
         logits = self.layer_linear(token_tensor_t)
 
@@ -549,9 +551,12 @@ class FineGrainedHistoryAttentionNet(nn.Module):
         # multiply token_tensor_t by probs and sum along dimension 1, resulting in a new_bert_representation tensor of shape (3, 13, 4)
         new_bert_representation = torch.sum(token_tensor_t * probs, dim=2)
 
+        new_bert_representation.reshape(slice_num, self.args.max_seq_length + 1, self.args.bert_hidden)
+
         # split the new_bert_representation tensor along dimension 1 to get the token-level tensor new_bert_representation (3, 12, 4)
         # and the sequence-level tensor new_mtl_input back (3, 1, 4)
         new_bert_representation, new_mtl_input = torch.split(new_bert_representation, [self.args.max_seq_length, 1], 1)
+        new_mtl_input = torch.squeeze(new_mtl_input, axis=1)
 
         # squeeze back the probs tensor: (3, 13, 11, 1) --> (3, 13, 11)
         squeezed_probs = torch.squeeze(probs)

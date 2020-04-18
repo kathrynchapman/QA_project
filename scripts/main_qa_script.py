@@ -265,11 +265,20 @@ def train(train_file, tokenizer):
 
 attention_dict = {}
 RawResult = collections.namedtuple("RawResult", ["unique_id", "start_logits", "end_logits", "yesno_logits", "followup_logits"])
+
+
+def flatten(t):
+    t = t.reshape(1, -1)
+    t = t.squeeze()
+    return t
+
+
 def evaluate(dev_file, tokenizer):
     val_summary_writer = SummaryWriter()
     val_total_loss = []
     all_results = []
     all_output_features = []
+
     f1_list = []
     heq_list = []
     dheq_list = []
@@ -296,18 +305,16 @@ def evaluate(dev_file, tokenizer):
 
     print("***** Running evaluation *****")
     print("  Num orig examples = ", len(dev_examples))
-    print("  Num train_features = ", len(dev_features))
-    print("  Num train batches = ", dev_num_batches)
+    print("  Num dev_features = ", len(dev_features))
+    print("  Num dev batches = ", dev_num_batches)
     print("  Batch size = ", args.batch_size)
-    print("  Num steps = ", args.num_train_steps)
-
 
     set_seed(args)
 
 
     dev_batches = cqa_gen_example_aware_batches_v2(dev_features, dev_example_tracker, dev_variation_tracker,
                                                      dev_example_features_nums,
-                                                     batch_size=args.batch_size, num_epoches=1, shuffle=True)
+                                                     batch_size=args.batch_size, num_epoches=1, shuffle=False)
 
     dev_iterator = tqdm(dev_batches, desc="Iteration", disable=False, total=dev_num_batches)
     for step, batch in enumerate(dev_iterator):
@@ -353,6 +360,7 @@ def evaluate(dev_file, tokenizer):
             batch_results.append(RawResult(unique_id=each_unique_id, start_logits=each_start_logits,
                                            end_logits=each_end_logits, yesno_logits=each_yesno_logits,
                                            followup_logits=each_followup_logits))
+
         all_results.extend(batch_results)
 
 
