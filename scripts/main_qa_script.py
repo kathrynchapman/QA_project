@@ -282,7 +282,7 @@ def evaluate(dev_file, tokenizer):
             max([int(f.split('-')[1]) for f in listdir(args.output_dir + 'saved_checkpoints/') if
                  isdir(join(args.output_dir + 'saved_checkpoints/', f))]))
 
-    state_dict_path = '../load_save_model_practice_exps_dir/saved_checkpoints/{}/state_dict.pt'.format(
+    state_dict_path = '{}saved_checkpoints/{}/state_dict.pt'.format(args.output_dir,
         checkpoint_to_evaluate)
 
     model = MTLModel(args)
