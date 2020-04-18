@@ -465,6 +465,9 @@ min_f1 = 0.4
 def external_call(gold, pred):
   # we modify the code so that this function can be called during training. 
   # specifically, we remove the arg parser.
+  print("Gold length: ", len(gold))
+  print("Pred length: ", len(pred))
+  assert len(gold) == len(pred)
   val = gold
   preds = defaultdict(dict)
   total = 0

@@ -114,7 +114,8 @@ def load_data(file, tokenizer):
             examples=examples, tokenizer=tokenizer,
             max_seq_length=args.max_seq_length, doc_stride=args.doc_stride,
             max_query_length=64,
-            max_considered_history_turns=args.max_considered_history_turns)
+            max_considered_history_turns=args.max_considered_history_turns,
+            is_training=train_or_dev=='train')
         with open(features_fname, 'wb') as handle:
             pickle.dump(features, handle)
         with open(example_tracker_fname, 'wb') as handle:
