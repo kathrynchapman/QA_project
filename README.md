@@ -1,4 +1,7 @@
-# QA_project
+# QA_project - Attentive History Selection for Conversational Question Answering
+
+Github for original TF code: https://github.com/prdwb/attentive_history_selection
+Paper we are implementing in PyTorch: https://arxiv.org/abs/1908.09456
 
 Rewritten scripts:
   1. pt_cqa_supports.py
