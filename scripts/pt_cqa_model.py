@@ -214,6 +214,16 @@ class HistoryAttentionNet(nn.Module):
         :return probs: torch.Tensor of shape (batch_size, max_considered_history_turns, 1), containing the attention weights
             of each variation to the aggregated representation of its example/sub-passage
         """
+
+        # Example with the following arguments:
+        # batch_size = 8
+        # max_seq_length = 12
+        # hidden_size = 4
+        # slice_mask: [3, 3, 2, 1, 1, 1, 1, 1]
+        # slice_num = 3
+
+        #### GENERATE TENSOR: probs ####
+
         # pad history_attention_input: (8, 3) --> (13, 3)
         padding = nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num)) # padding at the bottom
         history_attention_input = padding(history_attention_input)
@@ -229,24 +239,18 @@ class HistoryAttentionNet(nn.Module):
         input_tensor = torch.stack(padded, axis=0)
 
         # pass input_tensor to a single-layer feed-forward neural network, after which the input_tensor will be of size (8, 11, 1)
-
-
-        # do the forward pass
-        # print("Input tesnor device:", input_tensor.get_device())
-        # print("Linear layer device:", self.layer_linear)
         logits = self.layer_linear(input_tensor)
 
         # squeeze input_tensor along dimension 2, so that it has size (8, 11)
         logits = torch.squeeze(logits, dim=2)
 
         # mask the padded parts of input_tensor out and apply the exponential function to all its cells
-
-
-
         logits_mask = self.sequence_mask(torch.tensor(slice_mask), self.args.max_considered_history_turns)
         logits_mask = self.flip(logits_mask, 1)
+
         # exp_logits_masked = torch.exp(logits) * logits_mask.to(args.device)
         exp_logits_masked = torch.exp(logits) * logits_mask.to('cuda:0')
+
         # use the softmax function to generate a tensor of probabilities
         # slice the resulting exp_logits_masked tensor to get rid of the padded rows, obtaining a tensor of size (3, 11)
         exp_logits_masked = exp_logits_masked[:slice_num, :]
@@ -381,7 +385,6 @@ class DisableHistoryAttentionNet(nn.Module):
 
         # pad the splits so that all of them are of size (11, 4)
 
-
         padded = []
         for i in range(self.args.batch_size):
             padded.append(self.pad_fn(splits[i], slice_mask[i]))
@@ -498,7 +501,22 @@ class FineGrainedHistoryAttentionNet(nn.Module):
 
     def forward(self, bert_representation, mtl_input, slice_mask, slice_num, history_attention_input=None):
         history_attention_input = None
+
+        # Example with the following arguments:
+        # batch_size = 8
+        # max_seq_length = 12
+        # hidden_size = 4
+        # slice_mask = [3, 3, 2, 1, 1, 1, 1, 1]
+        # slice_num = 3
+
+        # first concatenate the bert_representation and mtl_input together
+        # so that we can process them together
+        # shape for bert_representation: (8, 12, 4)
+        # shape for mtl_input: (8, 4) --> after unsqueeze: (8, 1, 4)
+        # shape for bert_representation after being concatenated with the unsqueezed mtl_input: (8, 13, 4)
         bert_representation = torch.cat((bert_representation, torch.unsqueeze(mtl_input, dim=1)), dim=1)
+
+        #### GENERATE TENSOR: probs ####
 
         # pad bert_representation: (8, 13, 4) --> (13, 13, 4)
         bert_representation = nn.functional.pad(bert_representation, (
@@ -517,18 +535,17 @@ class FineGrainedHistoryAttentionNet(nn.Module):
         # stack the splits to form a token_tensor of size (8, 11, 13, 4)
         token_tensor = torch.stack(padded, axis=0)
         token_tensor.reshape(self.args.batch_size, self.args.max_considered_history_turns, self.args.max_seq_length + 1, self.args.bert_hidden)
-
+        
         # permute dimensions in token_tensor: (8, 13, 11, 4)
         token_tensor_t = token_tensor.permute(0, 2, 1, 3)
 
-
+        # pass token_tensor to a single-layer feed-forward neural network, after which the input_tensor will be of size (8, 13, 11, 1)
         logits = self.layer_linear(token_tensor_t)
 
         # squeeze token_tensor along dimension 2, so that it has size (8, 13, 11)
         logits = torch.squeeze(logits, dim=-1)
 
         # mask the padded parts of token_tensor out and apply the exponential function to all its cells
-
         logits_mask = self.sequence_mask(torch.tensor(slice_mask), self.args.max_considered_history_turns)
         logits_mask = self.flip(logits_mask, 1)
         logits_mask = torch.unsqueeze(logits_mask, dim=1)
@@ -542,6 +559,8 @@ class FineGrainedHistoryAttentionNet(nn.Module):
         # divide each cell by the sum of all cells, resulting in a probs tensor of shape (3, 13, 11)
         probs = exp_logits_masked / torch.sum(exp_logits_masked, dim=2, keepdim=True)
 
+        #### GENERATE TENSORS: new_mtl_input and new_bert_representation ####
+
         # slice token_tensor to get rid of the padded part, resulting in a token_tensor_t tensor of size (3, 11, 13, 4)
         token_tensor_t = token_tensor_t[:slice_num, :, :, :]
 
@@ -550,18 +569,17 @@ class FineGrainedHistoryAttentionNet(nn.Module):
 
         # multiply token_tensor_t by probs and sum along dimension 1, resulting in a new_bert_representation tensor of shape (3, 13, 4)
         new_bert_representation = torch.sum(token_tensor_t * probs, dim=2)
-
         new_bert_representation.reshape(slice_num, self.args.max_seq_length + 1, self.args.bert_hidden)
 
         # split the new_bert_representation tensor along dimension 1 to get the token-level tensor new_bert_representation (3, 12, 4)
-        # and the sequence-level tensor new_mtl_input back (3, 1, 4)
+        # and the sequence-level tensor new_mtl_input back (3, 4)
         new_bert_representation, new_mtl_input = torch.split(new_bert_representation, [self.args.max_seq_length, 1], 1)
         new_mtl_input = torch.squeeze(new_mtl_input, axis=1)
 
         # squeeze back the probs tensor: (3, 13, 11, 1) --> (3, 13, 11)
-        squeezed_probs = torch.squeeze(probs)
+        probs = torch.squeeze(probs)
 
-        return new_bert_representation, new_mtl_input, squeezed_probs
+        return new_bert_representation, new_mtl_input, probs
 
 
 class MTLModel(nn.Module):
