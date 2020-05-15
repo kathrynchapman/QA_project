@@ -3,25 +3,17 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-from torch.utils.tensorboard import SummaryWriter
+
 
 import collections
 import random
 import json
-import math
 import os
-# from bert import modeling
-# import optimization
-import six
-from time import sleep
 
 import numpy as np
-from copy import deepcopy
 import pickle
-import itertools
 import time
-# from time import time
-import traceback
+
 import datetime
 from os import listdir
 from os.path import isfile, join, isdir
@@ -30,36 +22,17 @@ from tqdm import tqdm, trange
 import logging
 
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
-from torch.utils.data.distributed import DistributedSampler
-from transformers import modeling_bert, BertConfig, BertTokenizer#, get_linear_schedule_with_warmup
+from transformers import BertConfig, BertTokenizer, get_linear_schedule_with_warmup
 from pt_cqa_supports import *
-# from cqa_flags import FLAGS
 from pt_cqa_model import *
 from pt_cqa_gen_batches import cqa_gen_example_aware_batches_v2
-# from cqa_rl_supports import *
 from scorer import external_call  # quac official evaluation script
+
 try:
     from torch.utils.tensorboard import SummaryWriter
 except ImportError:
     from tensorboardX import SummaryWriter
-from torch.optim.lr_scheduler import LambdaLR
 
-def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, last_epoch=-1):
-    """ Create a schedule with a learning rate that decreases linearly after
-    linearly increasing during a warmup period.
-    """
-
-    def lr_lambda(current_step):
-        if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
-        return max(
-            0.0, float(num_training_steps - current_step) / float(max(1, num_training_steps - num_warmup_steps))
-        )
-
-    return LambdaLR(optimizer, lr_lambda, last_epoch)
-    
 
 def set_seed(args):
     random.seed(args.seed)
@@ -67,6 +40,7 @@ def set_seed(args):
     torch.manual_seed(args.seed)
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
+
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +61,7 @@ def load_ckp(checkpoint_fpath, model, optimizer):
     valid_loss_min = checkpoint['valid_loss_min']
     # return model, optimizer, epoch value, min validation loss
     return model, optimizer, checkpoint['epoch'], valid_loss_min.item()
+
 
 def load_data(file, tokenizer):
     """
@@ -129,9 +104,9 @@ def load_data(file, tokenizer):
         features, example_tracker, variation_tracker, example_features_nums = convert_examples_to_variations_and_then_features(
             examples=examples, tokenizer=tokenizer,
             max_seq_length=args.max_seq_length, doc_stride=args.doc_stride,
-            max_query_length=64,
+            max_query_length=args.max_query_length,
             max_considered_history_turns=args.max_considered_history_turns,
-            is_training=train_or_dev=='train')
+            is_training=train_or_dev == 'train')
         with open(features_fname, 'wb') as handle:
             pickle.dump(features, handle)
         with open(example_tracker_fname, 'wb') as handle:
@@ -143,12 +118,12 @@ def load_data(file, tokenizer):
         print('{} features generated'.format(train_or_dev))
 
     temp_batches = cqa_gen_example_aware_batches_v2(features, example_tracker, variation_tracker,
-                                                          example_features_nums,
-                                                          batch_size=args.batch_size, num_epoches=1, shuffle=True)
+                                                    example_features_nums,
+                                                    batch_size=args.batch_size, num_epoches=1, shuffle=True)
     num_batches = len(list(temp_batches))
 
-
     return features, example_tracker, variation_tracker, example_features_nums, num_batches, examples
+
 
 def train(train_file, tokenizer):
     train_features, train_example_tracker, train_variation_tracker, train_example_features_nums, \
@@ -177,9 +152,26 @@ def train(train_file, tokenizer):
     model.zero_grad()
     # for name, param in model.named_parameters():
     #     if param.requires_grad:
-    #         print(name, param.data)
+    #         print(name)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=3e-5, eps=1e-6)
+    if args.exclude_LayerNorm:
+        param_list = []
+        for name, param in model.named_parameters():
+            if 'bias' in name or 'LayerNorm' in name:
+                param_list.append({'params': param, 'weight_decay': 0})
+            else:
+                param_list.append({'params': param})
+        params_to_optimize = param_list
+    else:
+        params_to_optimize = model.parameters()
+
+    if args.optimizer == 'AdamW':
+        if args.weight_decay:
+            optimizer = torch.optim.AdamW(params_to_optimize, lr=3e-5, eps=1e-6, weight_decay=args.weight_decay)
+    elif args.optimizer == 'Adam':
+        if args.weight_decay:
+            optimizer = torch.optim.Adam(params_to_optimize, lr=3e-5, eps=1e-6, weight_decay=args.weight_decay)
+
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.num_warmup_steps, num_training_steps=args.num_train_steps
     )
@@ -205,9 +197,16 @@ def train(train_file, tokenizer):
 
             fd_output = convert_features_to_feed_dict(args, output_features)
 
+            # PosHAE
+            turn_features = get_turn_features(fd['metadata'])
+
+            fd['history_answer_marker'] = fix_history_answer_marker_for_bhae(fd['history_answer_marker'].cpu(),
+                                                                             turn_features)
+
             if args.do_MTL:
                 (start_logits, end_logits), yesno_logits, followup_logits, attention_weights = model(fd,
-                                                                                  batch_slice_mask, batch_slice_num)
+                                                                                                     batch_slice_mask,
+                                                                                                     batch_slice_num)
                 total_loss = loss_fnct.compute_total_loss(fd_output, start_logits, end_logits,
                                                           yesno_logits, followup_logits)
             else:
@@ -252,7 +251,6 @@ def train(train_file, tokenizer):
 
                 break
 
-            # to reference for saving model
             if args.save_steps > 0 and global_step % args.save_steps == 0:
                 # Save model checkpoint
                 output_dir = os.path.join(args.output_dir + 'saved_checkpoints/checkpoint-{}/'.format(global_step))
@@ -260,27 +258,16 @@ def train(train_file, tokenizer):
                 if not os.path.exists(output_dir):
                     os.makedirs(output_dir)
                 torch.save(model.state_dict(), output_dir + "state_dict.pt")
-                # https://pytorch.org/tutorials/beginner/saving_loading_models.html
 
-                #
-                # model_to_save.save_pretrained(output_dir)
-                # tokenizer.save_pretrained(output_dir)
-                #
-                # torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                # logger.info("Saving model checkpoint to %s", output_dir)
-                #
-                # torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
-                # torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
-                # logger.info("Saving optimizer and scheduler states to %s", output_dir)
         steps_trained_in_current_epoch = 0
         train_batches = cqa_gen_example_aware_batches_v2(train_features, train_example_tracker,
                                                          train_variation_tracker, train_example_features_nums,
                                                          batch_size=args.batch_size, num_epoches=1, shuffle=True)
 
 
-
 attention_dict = {}
-RawResult = collections.namedtuple("RawResult", ["unique_id", "start_logits", "end_logits", "yesno_logits", "followup_logits"])
+RawResult = collections.namedtuple("RawResult",
+                                   ["unique_id", "start_logits", "end_logits", "yesno_logits", "followup_logits"])
 
 
 def flatten(t):
@@ -290,6 +277,9 @@ def flatten(t):
 
 
 def evaluate(dev_file, tokenizer):
+    """
+    Adapted from the original TF implementation's eval script
+    """
     val_summary_writer = SummaryWriter()
     val_total_loss = []
     all_results = []
@@ -330,10 +320,9 @@ def evaluate(dev_file, tokenizer):
 
         set_seed(args)
 
-
         dev_batches = cqa_gen_example_aware_batches_v2(dev_features, dev_example_tracker, dev_variation_tracker,
-                                                         dev_example_features_nums,
-                                                         batch_size=args.batch_size, num_epoches=1, shuffle=False)
+                                                       dev_example_features_nums,
+                                                       batch_size=args.batch_size, num_epoches=1, shuffle=False)
 
         dev_iterator = tqdm(dev_batches, desc="Iteration", disable=False, total=dev_num_batches)
         for step, batch in enumerate(dev_iterator):
@@ -341,13 +330,16 @@ def evaluate(dev_file, tokenizer):
             batch_results = []
             batch_features, batch_slice_mask, batch_slice_num, output_features = batch
 
-
             all_output_features.extend(output_features)
 
             fd = convert_features_to_feed_dict(args, batch_features)  # feed_dict
 
             fd_output = convert_features_to_feed_dict(args, output_features)
 
+            turn_features = get_turn_features(fd['metadata'])
+
+            fd['history_answer_marker'] = fix_history_answer_marker_for_bhae(fd['history_answer_marker'].cpu(),
+                                                                             turn_features)
 
             with torch.no_grad():
                 inputs = {
@@ -360,8 +352,6 @@ def evaluate(dev_file, tokenizer):
                     (start_logits, end_logits), yesno_logits, followup_logits, attention_weights = model(**inputs)
                 else:
                     start_logits, end_logits, attention_weights = model(**inputs)
-
-
 
             key = (tuple([dev_examples[f.example_index].qas_id for f in output_features]), step)
             attention_dict[key] = {'batch_slice_mask': batch_slice_mask, 'attention_weights_res': attention_weights,
@@ -382,32 +372,20 @@ def evaluate(dev_file, tokenizer):
 
             all_results.extend(batch_results)
 
-
         output_prediction_file = os.path.join(args.output_dir, "predictions_{}.json".format(step))
         output_nbest_file = os.path.join(args.output_dir, "nbest_predictions_{}.json".format(step))
         output_null_log_odds_file = os.path.join(args.output_dir, "output_null_log_odds_file_{}.json".format(step))
-
 
         write_predictions(dev_examples, all_output_features, all_results,
                           args.n_best_size, args.max_answer_length,
                           args.do_lower_case, output_prediction_file,
                           output_nbest_file, output_null_log_odds_file)
 
-        # -----------------------------------------------------------------------------------------------------------------
-        # -----------------------------------------------------------------------------------------------------------------
-        # -----------------------------------------------------------------------------------------------------------------
-
-        # time6 = time()
-        # print('write all val predictions', time6-time5)
         val_total_loss_value = np.average(val_total_loss)
 
-        # call the official evaluation script
-        # val_summary = tf.Summary()
-        # time7 = time()
         val_file_json = json.load(open(dev_file, 'r'))['data']
         val_eval_res = external_call(val_file_json, output_prediction_file)
-        # time8 = time()
-        # print('external call', time8-time7)
+
         val_f1 = val_eval_res['f1']
         val_followup = val_eval_res['followup']
         val_yesno = val_eval_res['yes/no']
@@ -419,34 +397,13 @@ def evaluate(dev_file, tokenizer):
         yesno_list.append(val_yesno)
         followup_list.append(val_followup)
 
-        # val_summary.value.add(tag="followup", simple_value=val_followup)
-        # val_summary.value.add(tag="val_yesno", simple_value=val_yesno)
-        # val_summary.value.add(tag="val_heq", simple_value=val_heq)
-        # val_summary.value.add(tag="val_dheq", simple_value=val_dheq)
-
         print('evaluation: {}, total_loss: {}, f1: {}, followup: {}, yesno: {}, heq: {}, dheq: {}\n'.format(
             step, val_total_loss_value, val_f1, val_followup, val_yesno, val_heq, val_dheq))
         with open(args.output_dir + 'step_result.txt', 'a') as fout:
             fout.write('{},{},{},{},{},{},{}\n'.format(step, val_f1, val_heq, val_dheq,
                                                        val_yesno, val_followup, args.output_dir))
 
-        # val_summary.value.add(tag="total_loss", simple_value=val_total_loss_value)
-        # val_summary.value.add(tag="f1", simple_value=val_f1)
         f1_list.append(val_f1)
-        # val_summary_writer.add_summary(val_summary, step)
-        # val_summary_writer.flush()
-
-        # save_path = saver.save(sess, '{}/model_{}.ckpt'.format(FLAGS.output_dir, step))
-        # print('Model saved in path', save_path)
-
-
-        # -----------------------------------------------------------------------------------------------------------------
-        # -----------------------------------------------------------------------------------------------------------------
-        # -----------------------------------------------------------------------------------------------------------------
-
-
-
-
 
 
 if __name__ == '__main__':
@@ -466,7 +423,8 @@ if __name__ == '__main__':
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument('--do_eval', action='store_true', help='Whether to evaluate on dev set.')
     parser.add_argument('--do_predict', action="store_true", help='Whether to predict or not.')
-    parser.add_argument('--eval_checkpoint', default=None, type=str, help='Specific checkpoint number to evaluate; default is latest checkpoint.')
+    parser.add_argument('--eval_checkpoint', default=None, type=str,
+                        help='Specific checkpoint number to evaluate; default is latest checkpoint.')
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
     parser.add_argument("--no_cuda", action="store_true", help="Avoid using CUDA when available")
     parser.add_argument("--load_small_portion", action="store_true", help="Load a small portion of data during dev.")
@@ -485,7 +443,8 @@ if __name__ == '__main__':
     parser.add_argument("--aux_shared", default=False, type=bool,
                         help="wheter to share the aux prediction layer with the main convqa model")
     parser.add_argument("--disable_attention", action="store_true", help="disable the history attention module")
-    parser.add_argument("--fine_grained_attention", action="store_true", help="Use fine-grained history attention module")
+    parser.add_argument("--fine_grained_attention", action="store_true",
+                        help="Use fine-grained history attention module")
     parser.add_argument("--batch_size", default=24, type=int, help="Batch size for training and predicting")
     parser.add_argument("--num_epochs", default=0, type=int, help="Number of training epochs")
     parser.add_argument("--do_MTL", default=True, type=bool, help="Whether to do multi-task learning")
@@ -494,12 +453,25 @@ if __name__ == '__main__':
     parser.add_argument("--MTL_mu", default=0.8, type=float, help="total loss = mu * convqa_loss + lambda * "
                                                                   "followup_loss + lambda * yesno_loss")
     parser.add_argument("--bert_hidden", default=768, type=int, help="bert hidden units, 768 or 1024")
-    parser.add_argument("--num_train_steps", default=30000, type=int, help= "loss: the loss gap on reward set, f1: the f1 on reward set")
-    parser.add_argument("--bert_version", default='bert-base-uncased', type=str, help="Which BERT model to use: bert-case-cased, bert-base-uncased, bert-large-cased, bert-large-uncased")
-    parser.add_argument("--n_best_size", default=20, type=int, help="The total number of n-best predictions to generate in the nbest_predictions.json output file.")
-    parser.add_argument('--max_answer_length', default=50, type=int, help="The maximum length of an answer that can be generated. This is needed because the start and end predictions are not conditioned on one another.")
-    parser.add_argument("--do_lower_case", default=True, type=bool, help="Whether to lower case the input text. Should be True for uncased models and False for cased models.")
-    parser.add_argument("--eval_all_checkpoints", action='store_true', help='Run eval script on all saved checkpoints. (Warning: will take a while)')
+    parser.add_argument("--num_train_steps", default=30000, type=int,
+                        help="loss: the loss gap on reward set, f1: the f1 on reward set")
+    parser.add_argument("--bert_version", default='bert-base-uncased', type=str,
+                        help="Which BERT model to use: bert-case-cased, bert-base-uncased, bert-large-cased, bert-large-uncased")
+    parser.add_argument("--n_best_size", default=20, type=int,
+                        help="The total number of n-best predictions to generate in the nbest_predictions.json output file.")
+    parser.add_argument('--max_answer_length', default=40, type=int,
+                        help="The maximum length of an answer that can be generated. This is needed because the start and end predictions are not conditioned on one another.")
+    parser.add_argument('--max_query_length', default=64, type=int,
+                        help="The maximum number of tokens for the question. Questions longer than this will be truncated to this length.")
+    parser.add_argument("--do_lower_case", default=True, type=bool,
+                        help="Whether to lower case the input text. Should be True for uncased models and False for cased models.")
+    parser.add_argument("--eval_all_checkpoints", action='store_true',
+                        help='Run eval script on all saved checkpoints. (Warning: will take a while)')
+    parser.add_argument("--optimizer", default="AdamW", type=str, help="Adam, AdamW")
+    parser.add_argument("--weight_decay", default=0.01, type=float, help="Weight decay for Adam/AdamW")
+    parser.add_argument("--exclude_LayerNorm", action='store_true',
+                        help="Whether to exclude LayerNorm and bias from weight decay.")
+
     args = parser.parse_args()
     args.output_dir = args.output_dir + '/' if args.output_dir[-1] != '/' else args.output_dir
     args.num_warmup_steps = int(args.num_train_steps * args.warmup_proportion)
@@ -524,7 +496,6 @@ if __name__ == '__main__':
     args.bert_config = bert_config
 
     tb_writer = SummaryWriter()
-
 
     if args.max_seq_length > bert_config.max_position_embeddings:
         raise ValueError(
@@ -558,7 +529,6 @@ if __name__ == '__main__':
                                                            -1] == '/' else args.quac_data_dir + '/val_v0.2.json'  # CHANGED TO VAL ONLY FOR TESTING
     train_file = args.quac_data_dir + 'train_v0.2.json' if args.quac_data_dir[
                                                                -1] == '/' else args.quac_data_dir + '/train_v0.2.json'
-
 
     if args.do_train:
         train(train_file, tokenizer)
