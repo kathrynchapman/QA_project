@@ -2,26 +2,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import collections
-import json
 import math
-import os
-from argparse import ArgumentParser
 import torch
-from transformers import BertPreTrainedModel, BertConfig, BertTokenizer
 from bert_model import BertModel
 import torch.nn as nn
-from torch.autograd import Variable
-
-
-# def truncated_normal_(tensor, mean=0, std=1):
-#     size = tensor.shape
-#     tmp = tensor.new_empty(size + (4,)).normal_()
-#     valid = (tmp < 2) & (tmp > -2)
-#     ind = valid.max(-1, keepdim=True)[1]
-#     tensor.data.copy_(tmp.gather(-1, ind).squeeze(-1))
-#     tensor.data.mul_(std).add_(mean)
-#     return tensor
 
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):
@@ -58,6 +42,7 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
         tensor.clamp_(min=a, max=b)
         return tensor
 
+
 def trunc_normal_(tensor, mean=0., std=1., a=0., b=1.):
     # type: (Tensor, float, float, float, float) -> Tensor
     r"""Fills the input Tensor with values drawn from a truncated
@@ -76,18 +61,26 @@ def trunc_normal_(tensor, mean=0., std=1., a=0., b=1.):
         >>> w = torch.empty(3, 5)
         >>> nn.init.trunc_normal_(w)
     """
-    a = -std*2
-    b = std*2
+    a = -std * 2
+    b = std * 2
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
 class CQABertModel(nn.Module):
+    """
+    The BERT encoder adapted for our implementation to include 'history_answer_marker' input
+    """
+
     def __init__(self, args, config):
         super(CQABertModel, self).__init__()
         self.args = args
         self.model = BertModel(config, self.args)
+
+        # if (self.args.n_gpu > 1 and self.args.device != "cpu"):
+        #     self.model = nn.DataParallel(self.model)
         if self.args.n_gpu > 1:
             self.model = nn.DataParallel(self.model)
+
         self.model.to(args.device)
 
     def forward(self, input_ids, input_mask, segment_ids, history_answer_marker, use_one_hot_embeddings):
@@ -101,36 +94,32 @@ class CQABertModel(nn.Module):
         outputs = self.model(**inputs)
         sequence_output = outputs[0]  # final hidden layer, with dimensions [batch_size, max_seq_len, hidden_size]
         pooled_output = outputs[1]  # entire sequence representation/embedding of 'CLS' token
-        # print("CLS:", final_hidden.shape)
-        # print(print("sent_rep:", sent_rep.shape)
         return sequence_output, pooled_output
 
 
 class CQAModel(nn.Module):
+    """
+    For answer span prediction
+    """
+
     def __init__(self, args):
         super(CQAModel, self).__init__()
         self.args = args
-        # self.output_weights = nn.Parameter(torch.empty(2, self.args.bert_hidden).normal_(mean=0, std=0.02))
-        self.output_weights = nn.Parameter(trunc_normal_(torch.empty(2, self.args.bert_hidden), std=0.02))
-        self.output_bias = nn.Parameter(torch.zeros(2))
+        self.linear_layer = nn.Linear(self.args.bert_hidden, 2, bias=True)
+        torch.nn.init.normal_(self.linear_layer.weight, std=0.02)
+        torch.nn.init.zeros_(self.linear_layer.bias)
 
     def forward(self, final_hidden):
         final_hidden_shape = final_hidden.shape
         batch_size = final_hidden_shape[0]
         seq_length = final_hidden_shape[1]
         hidden_size = final_hidden_shape[2]
-
-        # final_hidden_matrix = final_hidden.view(batch_size * seq_length, hidden_size)
         final_hidden_matrix = final_hidden.reshape(batch_size * seq_length, hidden_size)
 
-
-        logits = torch.matmul(final_hidden_matrix, self.output_weights.T)
-
-        logits = torch.add(logits, self.output_bias)
+        logits = self.linear_layer(final_hidden_matrix)
 
         logits = logits.reshape(batch_size, seq_length, 2)
         logits = logits.permute(2, 0, 1)
-        # logits = logits.T
 
         unstacked_logits = torch.unbind(logits, dim=0)
 
@@ -140,22 +129,33 @@ class CQAModel(nn.Module):
 
 
 class YesNoModel(nn.Module):
+    """
+    For yes/no dialog act prediction
+    """
+
     def __init__(self, args):
         super(YesNoModel, self).__init__()
         self.args = args
         self.linear_layer = nn.Linear(self.args.bert_hidden, 3, bias=False)
-        trunc_normal_(self.linear_layer.weight, std=0.02)
+        # trunc_normal_(self.linear_layer.weight, std=0.02)
+        torch.nn.init.normal_(self.linear_layer.weight, std=0.02)
 
     def forward(self, sent_rep):
         logits = self.linear_layer(sent_rep)
         return logits
 
+
 class FollowUpModel(nn.Module):
+    """
+    For follow-up dialog act prediction
+    """
+
     def __init__(self, args):
         super(FollowUpModel, self).__init__()
         self.args = args
         self.linear_layer = nn.Linear(self.args.bert_hidden, 3, bias=False)
-        trunc_normal_(self.linear_layer.weight, std=0.02)
+        # trunc_normal_(self.linear_layer.weight, std=0.02)
+        torch.nn.init.normal_(self.linear_layer.weight, std=0.02)
 
     def forward(self, sent_rep):
         logits = self.linear_layer(sent_rep)
@@ -163,11 +163,16 @@ class FollowUpModel(nn.Module):
 
 
 class HistoryAttentionNet(nn.Module):
+    """
+    History attention net, performed at sequence-level
+    """
+
     def __init__(self, args):
         super(HistoryAttentionNet, self).__init__()
         self.args = args
-        self.layer_linear = nn.Linear(self.args.bert_hidden, 1)
-        trunc_normal_(self.layer_linear.weight, std=0.02)
+        self.layer_linear = nn.Linear(self.args.bert_hidden, 1, bias=False)
+        # trunc_normal_(self.layer_linear.weight, std=0.02)
+        torch.nn.init.normal_(self.layer_linear.weight, std=0.02)
 
     def pad_fn(self, x, num):
         # pad the splits so that all of them are of size (11, 4)
@@ -214,18 +219,8 @@ class HistoryAttentionNet(nn.Module):
         :return probs: torch.Tensor of shape (batch_size, max_considered_history_turns, 1), containing the attention weights
             of each variation to the aggregated representation of its example/sub-passage
         """
-
-        # Example with the following arguments:
-        # batch_size = 8
-        # max_seq_length = 12
-        # hidden_size = 4
-        # slice_mask: [3, 3, 2, 1, 1, 1, 1, 1]
-        # slice_num = 3
-
-        #### GENERATE TENSOR: probs ####
-
         # pad history_attention_input: (8, 3) --> (13, 3)
-        padding = nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num)) # padding at the bottom
+        padding = nn.ZeroPad2d((0, 0, 0, self.args.batch_size - slice_num))  # padding at the bottom
         history_attention_input = padding(history_attention_input)
 
         # split history_attention_input into 8 tensors of sizes: (3, 4), (3, 4), (2, 4), (1, 4), (1, 4), (1, 4), (1, 4), (1, 4)
@@ -239,18 +234,22 @@ class HistoryAttentionNet(nn.Module):
         input_tensor = torch.stack(padded, axis=0)
 
         # pass input_tensor to a single-layer feed-forward neural network, after which the input_tensor will be of size (8, 11, 1)
+
+        # do the forward pass
+        # print("Input tesnor device:", input_tensor.get_device())
+        # print("Linear layer device:", self.layer_linear)
         logits = self.layer_linear(input_tensor)
 
         # squeeze input_tensor along dimension 2, so that it has size (8, 11)
         logits = torch.squeeze(logits, dim=2)
 
         # mask the padded parts of input_tensor out and apply the exponential function to all its cells
+
         logits_mask = self.sequence_mask(torch.tensor(slice_mask), self.args.max_considered_history_turns)
         logits_mask = self.flip(logits_mask, 1)
-
         # exp_logits_masked = torch.exp(logits) * logits_mask.to(args.device)
-        exp_logits_masked = torch.exp(logits) * logits_mask.to('cuda:0')
-
+        # exp_logits_masked = torch.exp(logits) * logits_mask.to('cuda:0')
+        exp_logits_masked = torch.exp(logits) * logits_mask.to(self.args.device)
         # use the softmax function to generate a tensor of probabilities
         # slice the resulting exp_logits_masked tensor to get rid of the padded rows, obtaining a tensor of size (3, 11)
         exp_logits_masked = exp_logits_masked[:slice_num, :]
@@ -287,14 +286,15 @@ class HistoryAttentionNet(nn.Module):
 
         # pad bert_representation: (8, 12, 4) --> (13, 12, 4)
         bert_representation = torch.nn.functional.pad(bert_representation,
-                                                  (0, 0, 0, 0, 0, self.args.batch_size - slice_num))  # padding at the back
+                                                      (0, 0, 0, 0, 0,
+                                                       self.args.batch_size - slice_num))  # padding at the back
 
         # split mtl_input into tensors of sizes: (3, 12, 4), (3, 12, 4), (2, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4)
         splits = torch.split(bert_representation, slice_mask, 0)
 
         # pad the splits so that all of them are of size (11, 12, 4)
         pad_fn = lambda x, num: nn.functional.pad(x, (
-        0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
+            0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
         padded = []
         for i in range(self.args.batch_size):
             padded.append(pad_fn(splits[i], slice_mask[i]))
@@ -439,14 +439,14 @@ class DisableHistoryAttentionNet(nn.Module):
 
         # pad bert_representation: (8, 12, 4) --> (13, 12, 4)
         bert_representation = nn.functional.pad(bert_representation, (
-        0, 0, 0, 0, 0, self.args.batch_size - slice_num))  # padding at the back
+            0, 0, 0, 0, 0, self.args.batch_size - slice_num))  # padding at the back
 
         # split mtl_input into tensors of sizes: (3, 12, 4), (3, 12, 4), (2, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4)
         splits = torch.split(bert_representation, slice_mask, 0)
 
         # pad the splits so that all of them are of size (11, 12, 4)
         pad_fn = lambda x, num: nn.functional.pad(x, (
-        0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
+            0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
         padded = []
         for i in range(self.args.batch_size):
             padded.append(pad_fn(splits[i], slice_mask[i]))
@@ -470,11 +470,16 @@ class DisableHistoryAttentionNet(nn.Module):
 
 
 class FineGrainedHistoryAttentionNet(nn.Module):
+    """
+    History attention net, performed at token-level
+    """
+
     def __init__(self, args):
         super(FineGrainedHistoryAttentionNet, self).__init__()
         self.args = args
-        self.layer_linear = nn.Linear(self.args.bert_hidden, 1)
-        trunc_normal_(self.layer_linear.weight, std=0.02)
+        self.layer_linear = nn.Linear(self.args.bert_hidden, 1, bias=False)
+        # trunc_normal_(self.layer_linear.weight, std=0.02)
+        torch.nn.init.normal_(self.layer_linear.weight, std=0.02)
 
     def sequence_mask(self, lengths, maxlen):
         """
@@ -498,54 +503,53 @@ class FineGrainedHistoryAttentionNet(nn.Module):
                                     dtype=torch.long, device=x.device)
         return x[tuple(indices)]
 
-
     def forward(self, bert_representation, mtl_input, slice_mask, slice_num, history_attention_input=None):
+        """
+            :param bert_representation: torch.Tensor of shape (batch_size, max_seq_length, hidden_size),
+                token-level representation
+            :param mtl_input: torch.Tensor of shape (batch_size, hidden_size),
+                sequence-level representation, obtained by averaging the token-level representation along axis 1 (max_seq_length)
+            :param slice_mask: list containing integers that indicate the size of each subtensor we will get after splitting
+                the history_attention_input tensor, corresponding to different examples/subpassages/padding
+            :param slice_num: int representing the number of examples/sub-passages in the batch
+            :return new_bert_representation: torch.Tensor of shape (batch_size, max_seq_length, hidden_size),
+                aggregated token-level representation
+            :return new_mtl_input: torch.Tensor of shape (batch_size, hidden_size), aggregated sequence-level representation
+            :return probs: torch.Tensor of shape (batch_size, max_considered_history_turns, 1), containing the attention weights
+                of each variation to the aggregated representation of its example/sub-passage
+            """
         history_attention_input = None
-
-        # Example with the following arguments:
-        # batch_size = 8
-        # max_seq_length = 12
-        # hidden_size = 4
-        # slice_mask = [3, 3, 2, 1, 1, 1, 1, 1]
-        # slice_num = 3
-
-        # first concatenate the bert_representation and mtl_input together
-        # so that we can process them together
-        # shape for bert_representation: (8, 12, 4)
-        # shape for mtl_input: (8, 4) --> after unsqueeze: (8, 1, 4)
-        # shape for bert_representation after being concatenated with the unsqueezed mtl_input: (8, 13, 4)
         bert_representation = torch.cat((bert_representation, torch.unsqueeze(mtl_input, dim=1)), dim=1)
-
-        #### GENERATE TENSOR: probs ####
 
         # pad bert_representation: (8, 13, 4) --> (13, 13, 4)
         bert_representation = nn.functional.pad(bert_representation, (
-        0, 0, 0, 0, 0, self.args.batch_size - slice_num))  # padding at the back
+            0, 0, 0, 0, 0, self.args.batch_size - slice_num))  # padding at the back
 
         # split bert_representation into 8 tensors of sizes: (3, 13, 4), (3, 13, 4), (2, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4)
         splits = torch.split(bert_representation, slice_mask, 0)
 
         # pad the splits so that all of them are of size (11, 13, 4)
         pad_fn = lambda x, num: nn.functional.pad(x, (
-        0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
+            0, 0, 0, 0, self.args.max_considered_history_turns - num, 0))  # padding at the front
         padded = []
         for i in range(self.args.batch_size):
             padded.append(pad_fn(splits[i], slice_mask[i]))
 
         # stack the splits to form a token_tensor of size (8, 11, 13, 4)
         token_tensor = torch.stack(padded, axis=0)
-        token_tensor.reshape(self.args.batch_size, self.args.max_considered_history_turns, self.args.max_seq_length + 1, self.args.bert_hidden)
-        
+        token_tensor.reshape(self.args.batch_size, self.args.max_considered_history_turns, self.args.max_seq_length + 1,
+                             self.args.bert_hidden)
+
         # permute dimensions in token_tensor: (8, 13, 11, 4)
         token_tensor_t = token_tensor.permute(0, 2, 1, 3)
 
-        # pass token_tensor to a single-layer feed-forward neural network, after which the input_tensor will be of size (8, 13, 11, 1)
         logits = self.layer_linear(token_tensor_t)
 
         # squeeze token_tensor along dimension 2, so that it has size (8, 13, 11)
         logits = torch.squeeze(logits, dim=-1)
 
         # mask the padded parts of token_tensor out and apply the exponential function to all its cells
+
         logits_mask = self.sequence_mask(torch.tensor(slice_mask), self.args.max_considered_history_turns)
         logits_mask = self.flip(logits_mask, 1)
         logits_mask = torch.unsqueeze(logits_mask, dim=1)
@@ -559,8 +563,6 @@ class FineGrainedHistoryAttentionNet(nn.Module):
         # divide each cell by the sum of all cells, resulting in a probs tensor of shape (3, 13, 11)
         probs = exp_logits_masked / torch.sum(exp_logits_masked, dim=2, keepdim=True)
 
-        #### GENERATE TENSORS: new_mtl_input and new_bert_representation ####
-
         # slice token_tensor to get rid of the padded part, resulting in a token_tensor_t tensor of size (3, 11, 13, 4)
         token_tensor_t = token_tensor_t[:slice_num, :, :, :]
 
@@ -569,17 +571,18 @@ class FineGrainedHistoryAttentionNet(nn.Module):
 
         # multiply token_tensor_t by probs and sum along dimension 1, resulting in a new_bert_representation tensor of shape (3, 13, 4)
         new_bert_representation = torch.sum(token_tensor_t * probs, dim=2)
+
         new_bert_representation.reshape(slice_num, self.args.max_seq_length + 1, self.args.bert_hidden)
 
         # split the new_bert_representation tensor along dimension 1 to get the token-level tensor new_bert_representation (3, 12, 4)
-        # and the sequence-level tensor new_mtl_input back (3, 4)
+        # and the sequence-level tensor new_mtl_input back (3, 1, 4)
         new_bert_representation, new_mtl_input = torch.split(new_bert_representation, [self.args.max_seq_length, 1], 1)
         new_mtl_input = torch.squeeze(new_mtl_input, axis=1)
 
         # squeeze back the probs tensor: (3, 13, 11, 1) --> (3, 13, 11)
-        probs = torch.squeeze(probs)
+        squeezed_probs = torch.squeeze(probs)
 
-        return new_bert_representation, new_mtl_input, probs
+        return new_bert_representation, new_mtl_input, squeezed_probs
 
 
 class MTLModel(nn.Module):
@@ -587,6 +590,7 @@ class MTLModel(nn.Module):
     Full multi-task learning model
     Includes BERT encoder, History Attention Model, Conversational QA Model, Yes-No Model, and Follow-up Model
     """
+
     def __init__(self, args):
         super(MTLModel, self).__init__()
         self.args = args
@@ -601,7 +605,6 @@ class MTLModel(nn.Module):
             self.ham = DisableHistoryAttentionNet(self.args).to(self.args.device)
         else:
             self.ham = HistoryAttentionNet(self.args).to(args.device)
-
 
     def forward(self, fd, batch_slice_mask, batch_slice_num):
         # encode everything with the BERT model
@@ -624,7 +627,8 @@ class MTLModel(nn.Module):
                                                                                  self.args.device))
 
         if self.args.do_MTL:
-            return (self.cqa(new_bert_representation), self.yesno(new_mtl_input), self.followup(new_mtl_input), attention_weights)
+            return (self.cqa(new_bert_representation), self.yesno(new_mtl_input), self.followup(new_mtl_input),
+                    attention_weights)
         else:
             return (self.cqa(new_bert_representation), attention_weights)
 
@@ -633,6 +637,7 @@ class MTLLoss():
     """
     Computes the multi-task learning loss
     """
+
     def __init__(self, args):
         self.args = args
 
@@ -646,16 +651,11 @@ class MTLLoss():
         :param followup_logits: logits for the followup model
         :return: loss from the desired models
         """
-        # softmax = torch.nn.Softmax(dim=-1)
-        # start_probs = softmax(start_logits)
-        # end_probs = softmax(end_logits)
-
         # get the losses - the start loss is for identifying the correct start of the answer span,
         # end loss is identifying the correct end of the answer span
 
         start_loss = self.compute_cqa_loss(start_logits, fd_output['start_positions'], self.args.max_seq_length)
         end_loss = self.compute_cqa_loss(end_logits, fd_output['end_positions'], self.args.max_seq_length)
-
 
         if self.args.do_MTL:
             cqa_loss = (start_loss + end_loss) / 2.0
@@ -686,6 +686,7 @@ class MTLLoss():
         one_hot_positions = nn.functional.one_hot(positions, seq_length)
         log_probs = nn.functional.log_softmax(logits, dim=-1)
         loss = -torch.mean(torch.sum(one_hot_positions * log_probs, dim=-1))
+
         return loss
 
     def compute_sparse_softmax_cross_entropy(self, logits, labels):
@@ -695,246 +696,11 @@ class MTLLoss():
         :param labels: Correct labels
         :return: loss
         """
-        logp = nn.functional.log_softmax(logits, dim=-1)
-        logpy = torch.gather(logp, 1, Variable(labels.view(-1, 1)))
-        loss = -(logpy).mean()
+        # logp = nn.functional.log_softmax(logits, dim=-1)
+        # logpy = torch.gather(logp, 1, Variable(labels.view(-1, 1)))
+        # loss = -(logpy).mean()
+
+        loss_fnct = nn.CrossEntropyLoss(reduce='mean')
+        loss = loss_fnct(logits, labels)
+
         return loss
-
-#
-# def fine_grained_history_attention_net(args, bert_representation, mtl_input, slice_mask, slice_num):
-#     """
-#     :param bert_representation: torch.Tensor of shape (batch_size, max_seq_length, hidden_size),
-#         token-level representation
-#     :param mtl_input: torch.Tensor of shape (batch_size, hidden_size),
-#         sequence-level representation, obtained by averaging the token-level representation along axis 1 (max_seq_length)
-#     :param slice_mask: list containing integers that indicate the size of each subtensor we will get after splitting
-#         the history_attention_input tensor, corresponding to different examples/subpassages/padding
-#     :param slice_num: int representing the number of examples/sub-passages in the batch
-#     :return new_bert_representation: torch.Tensor of shape (batch_size, max_seq_length, hidden_size),
-#         aggregated token-level representation
-#     :return new_mtl_input: torch.Tensor of shape (batch_size, hidden_size), aggregated sequence-level representation
-#     :return probs: torch.Tensor of shape (batch_size, max_considered_history_turns, 1), containing the attention weights
-#         of each variation to the aggregated representation of its example/sub-passage
-#     """
-#
-#     # Example with the following arguments:
-#     # batch_size = 8
-#     # max_seq_length = 12
-#     # hidden_size = 4
-#     # slice_mask: [3, 3, 2, 1, 1, 1, 1, 1]
-#     # slice_num = 3
-#
-#     # first concatenate the bert_representation and mtl_input together
-#     # so that we can process them together
-#     # shape for bert_representation: (8, 12, 4)
-#     # shape for mtl_input: (8, 4) --> after unsqueeze: (8, 1, 4)
-#     # shape for bert_representation after being concatenated with the unsqueezed mtl_input: (8, 13, 4)
-#     bert_representation = torch.cat((bert_representation, torch.unsqueeze(mtl_input, dim=1)), dim=1)
-#
-#     # pad bert_representation: (8, 13, 4) --> (13, 13, 4)
-#     bert_representation = torch.nn.functional.pad(bert_representation, (0, 0, 0, 0, 0, args.batch_size-slice_num)) #padding at the back
-#
-#     # split bert_representation into 8 tensors of sizes: (3, 13, 4), (3, 13, 4), (2, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4), (1, 13, 4)
-#     splits = torch.split(bert_representation, slice_mask, 0)
-#
-#     # pad the splits so that all of them are of size (11, 13, 4)
-#     pad_fn = lambda x, num: torch.nn.functional.pad(x, (0, 0, 0, 0, args.max_considered_history_turns - num, 0)) #padding at the front
-#     padded = []
-#     for i in range(args.batch_size):
-#         padded.append(pad_fn(splits[i], slice_mask[i]))
-#
-#     # stack the splits to form a token_tensor of size (8, 11, 13, 4)
-#     token_tensor = torch.stack(padded, axis=0)
-#
-#     # permute dimensions in token_tensor: (8, 13, 11, 4)
-#     token_tensor_t = token_tensor.permute(0, 2, 1, 3)
-#
-#     # pass token_tensor to a single-layer feed-forward neural network, after which the input_tensor will be of size (8, 13, 11, 1)
-#     # create network layers
-#     layer_linear = torch.nn.Linear(token_tensor_t.shape[3], 1)
-#     torch.nn.init.normal_(layer_linear.weight, std=0.02) #Initialize the weights to a normal distribution with sd=0.02 (IN THE ORIGINAL CODE, THEY USE TRUNCATED NORMAL DISTRIBUTION)
-#     # do the forward pass
-#     logits =  layer_linear(token_tensor_t)
-#
-#     # squeeze token_tensor along dimension 2, so that it has size (8, 13, 11)
-#     logits = torch.squeeze(logits, dim=-1)
-#
-#     # mask the padded parts of token_tensor out and apply the exponential function to all its cells
-#
-#     logits_mask = sequence_mask(torch.tensor(slice_mask), args.max_considered_history_turns)
-#     logits_mask = flip(logits_mask, 1)
-#     logits_mask = torch.unsqueeze(logits_mask, dim=1)
-#
-#     # use the softmax function to generate a tensor of probabilities
-#     exp_logits_masked = torch.exp(logits) * logits_mask
-#
-#     # slice the resulting exp_logits_masked tensor to get rid of the padded rows, obtaining a tensor of size (3, 13, 11)
-#     exp_logits_masked = exp_logits_masked[:slice_num, :, :]
-#
-#     # divide each cell by the sum of all cells, resulting in a probs tensor of shape (3, 13, 11)
-#     probs = exp_logits_masked / torch.sum(exp_logits_masked, dim=2, keepdim=True)
-#
-#     # slice token_tensor to get rid of the padded part, resulting in a token_tensor_t tensor of size (3, 11, 13, 4)
-#     token_tensor_t = token_tensor_t[:slice_num, :, :, :]
-#
-#     # unsqueeze the probs tensor: (3, 13, 11) --> (3, 13, 11, 1)
-#     probs = torch.unsqueeze(probs, dim=-1)
-#
-#     # multiply token_tensor_t by probs and sum along dimension 1, resulting in a new_bert_representation tensor of shape (3, 13, 4)
-#     new_bert_representation = torch.sum(token_tensor_t * probs, dim=2)
-#
-#     # split the new_bert_representation tensor along dimension 1 to get the token-level tensor new_bert_representation (3, 12, 4)
-#     # and the sequence-level tensor new_mtl_input back (3, 1, 4)
-#     new_bert_representation, new_mtl_input = torch.split(new_bert_representation, [args.max_seq_length, 1], 1)
-#
-#     # squeeze back the probs tensor: (3, 13, 11, 1) --> (3, 13, 11)
-#     squeezed_probs = torch.squeeze(probs)
-#
-#     return new_bert_representation, new_mtl_input, squeezed_probs
-
-# def disable_history_attention_net(args, bert_representation, history_attention_input, mtl_input, slice_mask, slice_num):
-#     """
-#     :param bert_representation: torch.Tensor of shape (batch_size, max_seq_length, hidden_size),
-#         token-level representation
-#     :param history_attention_input: torch.Tensor of shape (batch_size, hidden_size),
-#         sequence-level representation, obtained by averaging the token-level representation along axis 1 (max_seq_length)
-#     :param mtl_input: torch.Tensor of shape (batch_size, hidden_size),
-#         sequence-level representation, obtained by averaging the token-level representation along axis 1 (max_seq_length),
-#         same as history_attention_input
-#     :param slice_mask: list containing integers that indicate the size of each subtensor we will get after splitting
-#         the history_attention_input tensor, corresponding to different examples/subpassages/padding
-#     :param slice_num: int representing the number of examples/sub-passages in the batch
-#     :return new_bert_representation: torch.Tensor of shape (batch_size, max_seq_length, hidden_size),
-#         aggregated token-level representation
-#     :return new_mtl_input: torch.Tensor of shape (batch_size, hidden_size), aggregated sequence-level representation
-#     :return probs: torch.Tensor of shape (batch_size, max_considered_history_turns, 1), containing the attention weights
-#         of each variation to the aggregated representation of its example/sub-passage
-#     """
-#
-#     # Example with the following arguments:
-#     # batch_size = 8
-#     # max_seq_length = 12
-#     # hidden_size = 4
-#     # slice_mask: [3, 3, 2, 1, 1, 1, 1, 1]
-#     # slice_num = 3
-#
-#
-#     #### GENERATE TENSOR: probs ####
-#
-#     # pad history_attention_input: (8, 3) --> (13, 3)
-#     padding = torch.nn.ZeroPad2d((0, 0, 0, args.batch_size-slice_num)) #padding at the bottom
-#     history_attention_input = padding(history_attention_input)
-#
-#     # split history_attention_input into 8 tensors of sizes: (3, 4), (3, 4), (2, 4), (1, 4), (1, 4), (1, 4), (1, 4), (1, 4)
-#     splits = torch.split(history_attention_input, slice_mask, 0)
-#
-#     # pad the splits so that all of them are of size (11, 4)
-#     def pad_fn(x, num):
-#         padding = torch.nn.ZeroPad2d((0, 0, args.max_considered_history_turns-num, 0)) #padding at the top
-#         return padding(x)
-#
-#     padded = []
-#     for i in range(args.batch_size):
-#         padded.append(pad_fn(splits[i], slice_mask[i]))
-#
-#     # stack the splits to form an input_tensor of size (8, 11, 4)
-#     input_tensor = torch.stack(padded, axis=0)
-#
-#     # we assign equal logits, which means equal attention weights
-#     # this helps us to see whether the attention networks as expected
-#     logits = torch.ones(args.batch_size, args.max_considered_history_turns)
-#
-#     # mask the padded parts of input_tensor out and apply the exponential function to all its cells
-#     def sequence_mask(lengths, maxlen):
-#         """
-#         Returns a mask tensor representing the first n positions of each cell.
-#         Equivalent to tf.sequence_mask() with param dtype=tf.float32.
-#         """
-#         if maxlen is None:
-#             maxlen = lengths.max()
-#         mask = ~(torch.ones((len(lengths), maxlen)).cumsum(dim=1).t() > lengths).t()
-#         mask = mask.numpy().astype('float32')
-#         mask = torch.from_numpy(mask)
-#         return mask
-#
-#     def flip(x, dim):
-#         """
-#         Reverses specific dimensions of a tensor.
-#         Equivalent to tf.reverse().
-#         """
-#         indices = [slice(None)] * x.dim()
-#         indices[dim] = torch.arange(x.size(dim) - 1, -1, -1,
-#                                     dtype=torch.long, device=x.device)
-#         return x[tuple(indices)]
-#
-#     logits_mask = sequence_mask(torch.tensor(slice_mask), args.max_considered_history_turns)
-#     logits_mask = flip(logits_mask, 1)
-#     exp_logits_masked = torch.exp(logits) * logits_mask
-#
-#     # use the softmax function to generate a tensor of probabilities
-#     # slice the resulting exp_logits_masked tensor to get rid of the padded rows, obtaining a tensor of size (3, 11)
-#     exp_logits_masked = exp_logits_masked[:slice_num, :]
-#     # divide each cell by the sum of all cells
-#     probs = exp_logits_masked / torch.sum(exp_logits_masked, dim=1, keepdim=True)
-#
-#     # slice input_tensor to get rid of the paddings, resulting in a tensor of size (3, 11, 4)
-#     input_tensor = input_tensor[:slice_num, :, :]
-#
-#     # unsqueeze the probs tensor so that it has size (3, 11, 1)
-#     probs = torch.unsqueeze(probs, dim=-1)
-#
-#
-#     #### GENERATE TENSOR: new_mtl_input ####
-#
-#     # pad mtl_input: (8, 3) --> (13, 3)
-#     padding = torch.nn.ZeroPad2d((0, 0, 0, args.batch_size-slice_num)) #padding at the bottom
-#     mtl_input = padding(mtl_input)
-#
-#     # split mtl_input into tensors of sizes: (3, 4), (3, 4), (2, 4), (1, 4), (1, 4), (1, 4), (1, 4), (1, 4)
-#     splits = torch.split(mtl_input, slice_mask, 0)
-#
-#     # pad the splits so that all of them are of size (11, 4)
-#     padded = []
-#     for i in range(args.batch_size):
-#         padded.append(pad_fn(splits[i], slice_mask[i]))
-#
-#     # stack the splits to form a tensor of size (8, 11, 4)
-#     mtl_input = torch.stack(padded, axis=0)
-#
-#     # slice mtl_input to get rid of the paddings, resulting in a tensor of size (3, 11, 4)
-#     mtl_input = mtl_input[:slice_num, :, :]
-#
-#     # multiply by probs and sum along dimension 1, resulting in a new_mtl_input tensor of size (3, 4)
-#     new_mtl_input = torch.sum(mtl_input * probs, dim=1)
-#
-#
-#     #### GENERATE TENSOR: new_bert_representation ####
-#
-#     # pad bert_representation: (8, 12, 4) --> (13, 12, 4)
-#     bert_representation = torch.nn.functional.pad(bert_representation, (0, 0, 0, 0, 0, args.batch_size-slice_num)) #padding at the back
-#
-#     # split mtl_input into tensors of sizes: (3, 12, 4), (3, 12, 4), (2, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4), (1, 12, 4)
-#     splits = torch.split(bert_representation, slice_mask, 0)
-#
-#     # pad the splits so that all of them are of size (11, 12, 4)
-#     pad_fn = lambda x, num: torch.nn.functional.pad(x, (0, 0, 0, 0, args.max_considered_history_turns-num, 0)) #padding at the front
-#     padded = []
-#     for i in range(args.batch_size):
-#         padded.append(pad_fn(splits[i], slice_mask[i]))
-#
-#     # stack the splits to form a token_tensor of size (8, 11, 12, 4)
-#     token_tensor = torch.stack(padded, axis=0)
-#
-#     # slice token tensor to get rid of the padded part, resulting in a tensor of size (3, 11, 12, 4)
-#     token_tensor = token_tensor[:slice_num, :, :, :]
-#
-#     # unsqueeze the probs tensor: (3, 11, 1) --> (3, 11, 1, 1)
-#     probs = torch.unsqueeze(probs, dim=-1)
-#
-#     # multiply token_tensor by probs and sum along dimension 1
-#     new_bert_representation = torch.sum(token_tensor * probs, dim=1)
-#
-#     # squeeze back the probs tensor: (3, 11, 1, 1) --> (3, 11, 1)
-#     probs = torch.squeeze(probs)
-#
-#     return new_bert_representation, new_mtl_input, probs

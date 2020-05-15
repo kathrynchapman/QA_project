@@ -20,10 +20,6 @@ logger = logging.getLogger(__name__)
 
 
 def printable_text(text):
-  """Returns text encoded in a way suitable for print or `tf.logging`."""
-
-  # These functions want `str` for both Python2 and Python3, but in one case
-  # it's a Unicode string and in the other it's a byte string.
   if six.PY3:
     if isinstance(text, str):
       return text
@@ -195,6 +191,7 @@ def read_quac_examples(input_file, is_training):
 
             # add the current question
             question_with_histories += question[0]
+
             qas.append({'id': question[1], 'question': question_with_histories, 'answers': [{'answer_start': answer[1], 'text': answer[0]}],
                         'history_answer_marker': history_answer_marker, 'metadata': metadata})
 
@@ -255,7 +252,6 @@ def read_quac_examples(input_file, is_training):
                     assert len(tok_history_answer_marker) == len(doc_tokens)
                     assert len(each_tok_history_answer_marker) == len(doc_tokens)
                     qa['metadata']['tok_history_answer_markers'].append(each_tok_history_answer_marker)
-
 
             example = CQAExample(
                 qas_id=qas_id,
@@ -802,8 +798,7 @@ def _compute_softmax(scores):
         probs.append(score / total_sum)
     return probs
 
-def read_features_from_cache(cache_dir, use_RL, use_small):
-    features_dir = cache_dir
+
     
 def group_histories(features, markers, mask, slice_num):
     # group history answers into "bigram"
@@ -859,14 +854,17 @@ def add_group_history_markers(each_group_markers):
     return res
     
 def fix_history_answer_marker_for_bhae(sub_batch_history_answer_marker, turn_features):
+    """
+    Changes the 1's in the history answer marker (which indicate that a token belongs to a historical asnwer) to a
+    number representing their relative position between 0 and max_considered_history_turns + 1
+    """
     res = []
     for marker, turn_feature in zip(sub_batch_history_answer_marker, turn_features):
         turn_diff = turn_feature[2]
         marker = np.asarray(marker)
         marker[marker == 1] = turn_diff
         res.append(marker.tolist())
-        
-    return res
+    return torch.LongTensor(res)
 
 def convert_examples_to_variations_and_then_features(examples, tokenizer, max_seq_length, 
                                 doc_stride, max_query_length, max_considered_history_turns, is_training=True):
@@ -951,6 +949,9 @@ def convert_examples_to_example_variations(examples, max_considered_history_turn
 
 
 def convert_features_to_feed_dict(args, features):
+    """
+    Create the feed dictionary for the models
+    """
     batch_unique_ids, batch_input_ids, batch_input_mask = [], torch.LongTensor([]), torch.LongTensor([])
     batch_segment_ids, batch_start_positions, batch_end_positions, batch_history_answer_marker = \
         torch.LongTensor([]), torch.LongTensor([]), torch.LongTensor([]), torch.LongTensor([])
@@ -982,8 +983,6 @@ def convert_features_to_feed_dict(args, features):
                  'metadata': batch_metadata}
     return feed_dict
 
-# x = torch.cat((x, out), 0)
-    
     
 def get_turn_features(metadata):
     # extract current turn id, history turn id from metadata as a part of states
@@ -998,6 +997,10 @@ def get_turn_features(metadata):
     
     
 if __name__ == '__main__':
+
+    """
+    For debuggin'.....
+    """
 
     parser = ArgumentParser(
         description='QUAC reader')

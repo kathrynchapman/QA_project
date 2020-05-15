@@ -74,6 +74,7 @@ def aux_cqa_model(final_hidden):
         "cls/cqa/aux_output_weights", [2, FLAGS.bert_hidden],
         initializer=tf.truncated_normal_initializer(stddev=0.02))
 
+
     output_bias = tf.get_variable(
         "cls/cqa/aux_output_bias", [2], initializer=tf.zeros_initializer())
 

@@ -32,10 +32,10 @@ import itertools
 from time import time
 import traceback
 
-from cqa_supports import *
-from cqa_flags import FLAGS
-from cqa_model import *
-from cqa_gen_batches import *
+from tf_cqa_supports import *
+from tf_cqa_flags import FLAGS
+from tf_cqa_model import *
+from tf_cqa_gen_batches import *
 # from cqa_rl_supports import *
 from scorer import external_call # quac official evaluation script
 
@@ -337,6 +337,7 @@ if FLAGS.do_train:
     print("  Num orig examples = %d", len(train_examples))
     print("  Num train_features = %d", len(train_features))
     print("  Batch size = %d", FLAGS.train_batch_size)
+    # print("  Num batches =", )
     print("  Num steps = %d", num_train_steps)
     
 merged_summary_op = tf.summary.merge_all()
@@ -436,7 +437,7 @@ with tf.Session() as sess:
                                                                                   batch_slice_mask, batch_slice_num)
                             fd = convert_features_to_feed_dict(group_batch_features)
                         
-                        start_logits_res, end_logits_res,                         yesno_logits_res, followup_logits_res,                         batch_total_loss,                         attention_weights_res = sess.run([start_logits, end_logits, yesno_logits, followup_logits, 
+                        start_logits_res, end_logits_res, yesno_logits_res, followup_logits_res, batch_total_loss, attention_weights_res = sess.run([start_logits, end_logits, yesno_logits, followup_logits,
                                                           total_loss, attention_weights], 
                                     feed_dict={unique_ids: fd['unique_ids'], input_ids: fd['input_ids'], 
                                     input_mask: fd['input_mask'], segment_ids: fd['segment_ids'], 
@@ -453,7 +454,8 @@ with tf.Session() as sess:
                                               'batch_slice_num': batch_slice_num, 'len_batch_features': len(batch_features),
                                               'len_output_features': len(output_features)}
 
-                        for each_unique_id, each_start_logits, each_end_logits, each_yesno_logits, each_followup_logits                                 in zip(fd_output['unique_ids'], start_logits_res, end_logits_res, yesno_logits_res, followup_logits_res):  
+                        for each_unique_id, each_start_logits, each_end_logits, each_yesno_logits, each_followup_logits \
+                                in zip(fd_output['unique_ids'], start_logits_res, end_logits_res, yesno_logits_res, followup_logits_res):
                             each_unique_id = int(each_unique_id)
                             each_start_logits = [float(x) for x in each_start_logits.flat]
                             each_end_logits = [float(x) for x in each_end_logits.flat]

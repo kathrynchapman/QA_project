@@ -1,9 +1,8 @@
-import torch
-from torch import nn
 from transformers.modeling_bert import *
 
+
 class BertEmbeddings(nn.Module):
-    """Construct the embeddings from word, position and token_type embeddings.
+    """Construct the embeddings from word, position, token_type, and history answer embeddings.
     """
 
     def __init__(self, config, args):
@@ -11,8 +10,12 @@ class BertEmbeddings(nn.Module):
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
-        self.history_answer_embeddings = nn.Embedding(12, config.hidden_size)
         self.args = args
+        # create the embedding lookup table...
+        self.history_answer_embeddings = nn.Embedding(self.args.max_considered_history_turns + 1, config.hidden_size)
+        torch.nn.init.normal_(self.history_answer_embeddings.weight, std=0.02)
+        # trunc_normal_(self.history_answer_embeddings.weight, std=0.02)
+
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
@@ -21,7 +24,9 @@ class BertEmbeddings(nn.Module):
 
     def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None,
                 use_history_answer_embedding=True, history_answer_marker=None,
-                history_answer_embedding_vocab_size=12):
+                history_answer_embedding_vocab_size=None):
+        if not history_answer_embedding_vocab_size:
+            history_answer_embedding_vocab_size = self.args.max_considered_history_turns + 1
         if input_ids is not None:
             input_shape = input_ids.size()
         else:
@@ -37,66 +42,19 @@ class BertEmbeddings(nn.Module):
             token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
         if history_answer_marker is None:
             history_answer_marker = torch.zeros(torch.Size([history_answer_embedding_vocab_size, input_shape[1]]),
-                                                      dtype=torch.long, device=device
-                                                       )
+                                                dtype=torch.long, device=device
+                                                )
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids.to(device))
         position_embeddings = self.position_embeddings(position_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids.to(device))
         history_answer_embeddings = self.history_answer_embeddings(history_answer_marker.to(device))
-        # torch.set_printoptions(profile="full")
-        # print("input_embeds:", inputs_embeds)
-        # print("position_embeddings:", position_embeddings)
-        # print("token_type_embeddings:", token_type_embeddings)
-        # print("history_answer_embeddings:", history_answer_embeddings)
-
-        ###--------------------------------------------------------------------------------------##
-        # # self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
-        #
-        #
-        # if use_token_type:
-        #     if token_type_ids is None:
-        #         raise ValueError("`token_type_ids` must be specified if"
-        #                          "`use_token_type` is True.")
-        #     token_type_table = tf.get_variable(
-        #         name=token_type_embedding_name,
-        #         shape=[token_type_vocab_size, width],
-        #         initializer=create_initializer(initializer_range))
-        #     # This vocab will be small so we always do one-hot here, since it is always
-        #     # faster for a small vocabulary.
-        #     flat_token_type_ids = tf.reshape(token_type_ids, [-1])
-        #     one_hot_ids = tf.one_hot(flat_token_type_ids, depth=token_type_vocab_size)
-        #     token_type_embeddings = tf.matmul(one_hot_ids, token_type_table)
-        #     token_type_embeddings = tf.reshape(token_type_embeddings,
-        #                                        [batch_size, seq_length, width])
-        #     output += token_type_embeddings
-        #
-        # if use_history_answer_embedding:
-        #     if history_answer_marker is None:
-        #         raise ValueError("`history_answer_marker` must be specified if"
-        #                          "`use_history_answer_embedding` is True.")
-        #     history_answer_marker_table = torch.arange(torch.Size([history_answer_embedding_vocab_size, input_shape[1]])
-        #                                                )
-        #     initializer = create_initializer(initializer_range))
-        #
-        #     flat_history_answer_marker = torch.reshape(history_answer_marker, [-1])
-        #     one_hot_ids = torch.one_hot(flat_history_answer_marker, depth=history_answer_embedding_vocab_size)
-        #     history_answer_embedding = torch.matmul(one_hot_ids, history_answer_marker_table)
-        #     history_answer_embedding = torch.reshape(history_answer_embedding,
-        #     [12, seq_length, input_shape[1]])
-        #     output += history_answer_embedding
-
-            ###--------------------------------------------------------------------------------------##
-
-
 
         embeddings = inputs_embeds + position_embeddings + token_type_embeddings + history_answer_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
-
-
 
 
 class BertModel(BertPreTrainedModel):
@@ -138,16 +96,16 @@ class BertModel(BertPreTrainedModel):
 
     @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING)
     def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        history_answer_marker=None,
-        head_mask=None,
-        inputs_embeds=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
+            self,
+            input_ids=None,
+            attention_mask=None,
+            token_type_ids=None,
+            position_ids=None,
+            history_answer_marker=None,
+            head_mask=None,
+            inputs_embeds=None,
+            encoder_hidden_states=None,
+            encoder_attention_mask=None,
     ):
         r"""
     Return:
@@ -197,8 +155,9 @@ class BertModel(BertPreTrainedModel):
         if token_type_ids is None:
             token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
         if history_answer_marker is None:
-            history_answer_marker = torch.zeros(torch.Size([12, input_shape[1]]), dtype=torch.long, device=device)
-
+            history_answer_marker = torch.zeros(
+                torch.Size([self.args.max_considered_history_turns + 1, input_shape[1]]), dtype=torch.long,
+                device=device)
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
@@ -281,7 +240,7 @@ class BertModel(BertPreTrainedModel):
         embedding_output = self.embeddings(
             input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds,
             use_history_answer_embedding=True, history_answer_marker=history_answer_marker,
-            history_answer_embedding_vocab_size=12
+            history_answer_embedding_vocab_size=self.args.max_considered_history_turns + 1
         )
 
         encoder_outputs = self.encoder(
@@ -295,6 +254,6 @@ class BertModel(BertPreTrainedModel):
         pooled_output = self.pooler(sequence_output)
 
         outputs = (sequence_output, pooled_output,) + encoder_outputs[
-            1:
-        ]  # add hidden_states and attentions if they are here
+                                                      1:
+                                                      ]  # add hidden_states and attentions if they are here
         return outputs  # sequence_output, pooled_output, (hidden_states), (attentions)
