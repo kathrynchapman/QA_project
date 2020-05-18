@@ -76,9 +76,7 @@ class CQABertModel(nn.Module):
         self.args = args
         self.model = BertModel(config, self.args)
 
-        # if (self.args.n_gpu > 1 and self.args.device != "cpu"):
-        #     self.model = nn.DataParallel(self.model)
-        if self.args.n_gpu > 1:
+        if self.args.n_gpu > 1 and not self.args.no_cuda:
             self.model = nn.DataParallel(self.model)
 
         self.model.to(args.device)
