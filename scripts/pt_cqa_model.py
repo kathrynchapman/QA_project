@@ -78,7 +78,7 @@ class CQABertModel(nn.Module):
 
         # if (self.args.n_gpu > 1 and self.args.device != "cpu"):
         #     self.model = nn.DataParallel(self.model)
-        if self.args.n_gpu > 1 and not self.args.no_cuda:
+        if self.args.n_gpu > 1:
             self.model = nn.DataParallel(self.model)
 
         self.model.to(args.device)
